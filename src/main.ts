@@ -35,15 +35,20 @@ async function createAgent(): Promise<Agent> {
     model,
     SYSTEM_PROMPT,
 
-    // 工具调用时通知终端。
+    // 工具调用通知。
     (call) => {
       console.log(
         `\n[tool] ${call.name} ${JSON.stringify(call.input)}`,
       );
     },
 
-    // 本轮完成时保存消息。
+    // 完成后保存会话。
     (messages) => session.save(messages),
+
+    // 显示服务端返回的 thinking。
+    (text) => {
+      console.log(`\n[thinking]\n${text}\n`);
+    },
   );
 
   console.log(`会话文件：${session.filePath}`);

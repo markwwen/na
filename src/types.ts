@@ -3,8 +3,23 @@ export interface ModelConfig {
   baseUrl: string;
   apiKey: string;
   maxTokens: number;
+
+  thinking?: {
+    type: "enabled";
+    budget_tokens: number;
+  };
 }
 
+export interface ThinkingBlock {
+  type: "thinking";
+  thinking: string;
+  signature?: string;
+}
+
+export interface RedactedThinkingBlock {
+  type: "redacted_thinking";
+  data: string;
+}
 export interface TextBlock {
   type: "text";
   text: string;
@@ -26,7 +41,12 @@ export interface ToolResultBlock {
 
 export interface AssistantMessage {
   role: "assistant";
-  content: (TextBlock | ToolUseBlock)[];
+  content: (
+    | TextBlock
+    | ToolUseBlock
+    | ThinkingBlock
+    | RedactedThinkingBlock
+  )[];
 }
 
 export type Message =
@@ -48,3 +68,4 @@ export interface LLMResponse {
 export interface AgentTool extends ToolDefinition {
   execute: (input: unknown) => Promise<string>;
 }
+

@@ -35,6 +35,16 @@ export async function callLLM(
         messages: conversation,
         max_tokens: config.maxTokens,
         tools,
+
+        thinking: {
+          type: "enabled",
+          budget_tokens: 4096,
+        },
+
+        output_config: {
+          effort: "high",
+        },
+
         stream: false,
       }),
     },
@@ -67,6 +77,21 @@ export async function callLLM(
       block.id.length > 0 &&
       typeof block.name === "string" &&
       "input" in block
+    ) {
+      continue;
+    }
+    if (
+      block?.type === "thinking" &&
+      typeof block.thinking === "string" &&
+      (block.signature === undefined ||
+        typeof block.signature === "string")
+    ) {
+      continue;
+    }
+
+    if (
+      block?.type === "redacted_thinking" &&
+      typeof block.data === "string"
     ) {
       continue;
     }

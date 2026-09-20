@@ -14,12 +14,13 @@ export class Agent {
   private messages: Message[];
 
 constructor(
-private readonly model: ModelConfig,
-private readonly systemPrompt: string,
-private readonly onToolCall?: (call: ToolUseBlock) => void,
-private readonly saveMessages?: (messages: Message[]) => Promise<void>,
+  private readonly model: ModelConfig,
+  private readonly systemPrompt: string,
+  private readonly onToolCall?: (call: ToolUseBlock) => void,
+  private readonly saveMessages?: (messages: Message[]) => Promise<void>,
+  private readonly onThinking?: (text: string) => void,
 ) {
-this.messages = this.createInitialMessages();
+  this.messages = this.createInitialMessages();
 }
 
   async prompt(text: string): Promise<string> {
@@ -40,6 +41,15 @@ this.messages = this.createInitialMessages();
         working,
         toolDefinitions,
       );
+      for (const block of message.content) {
+        if (block.type === "thinking") {
+          this.onThinking?.(
+            block.thinking || "[服务端未提供可显示的 thinking 文本]",
+          );
+        } else if (block.type === "redacted_thinking") {
+          this.onThinking?.("[服务端返回了不可显示的 thinking 块]");
+        }
+      }
 
       if (stopReason === "max_tokens") {
         throw new Error("模型输出被截断，本轮未完成");
