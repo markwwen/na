@@ -42,7 +42,7 @@ export async function callLLM(
         },
 
         output_config: {
-          effort: "high",
+          effort: "max",
         },
 
         stream: false,
