@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,8 @@ test("REPL reports active limits after /model, applies /reload atomically and re
   const put = (maxInputChars: number, maxModelCalls: number, reserveTokens = 16384) => writeFile(settings,
     JSON.stringify({ defaultProvider: "mock", defaultModel: "mock", maxModelCalls, contextLimits: { maxInputChars, reserveTokens } }));
   await writeFile(join(root, "models.json"), JSON.stringify({ providers: { mock: {
-    api: "anthropic-messages", baseUrl: "http://mock.invalid", models: [{ id: "mock", contextWindow: 64000 }],
+    api: "anthropic-messages", baseUrl: "http://mock.invalid",
+    models: [{ id: "mock", contextWindow: 64000 }, { id: "other", contextWindow: 64000 }],
   } } }));
   await put(480000, 0);
   const child = spawn(process.execPath, ["--import", new URL("../node_modules/tsx/dist/loader.mjs", import.meta.url).href,
@@ -40,6 +41,10 @@ test("REPL reports active limits after /model, applies /reload atomically and re
     const startup = await prompt();
     const sessionId = /sessions\/(.*?)\.json/.exec(startup)?.[1];
     assert.ok(sessionId);
+    const saved = async () => JSON.parse(await readFile(join(root, ".na", "sessions", `${sessionId}.json`), "utf8"));
+    const initialPrompt = (await saved()).messages[0].content;
+    assert.ok(initialPrompt.includes("mock/mock model"));
+    assert.ok(initialPrompt.includes(`Your working directory is ${await realpath(root)}.`));
     await put(60000, 3, 4096);
     await command("/model");
     const before = JSON.parse(await command("/config"));
@@ -61,6 +66,13 @@ test("REPL reports active limits after /model, applies /reload atomically and re
     assert.equal(resumed.maxModelCalls, 0);
     assert.equal(resumed.contextWindow, 64000);
     assert.equal(resumed.contextLimits.reserveTokens, 4096);
+    await command("/model mock/other");
+    assert.equal((await saved()).model.id, "other");
+    assert.ok((await saved()).messages[0].content.includes("mock/other model"));
+    await command("/reload");
+    assert.ok((await saved()).messages[0].content.includes("mock/other model"));
+    await command(`/resume ${sessionId}`);
+    assert.ok((await saved()).messages[0].content.includes("mock/other model"));
     child.stdin.write("/quit\n");
     const [code] = await exit;
     assert.equal(code, 0);

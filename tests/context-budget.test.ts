@@ -186,3 +186,26 @@ test("invalid reload budgets are rejected before saving or replacing the environ
   assert.equal(saves, 0);
   assert.deepEqual(agent.contextInfo(), before);
 });
+
+test("model and prompt updates commit together only after a successful save", async t => {
+  let fail = true;
+  let saved: SessionSnapshot | undefined;
+  const agent = new Agent(model, "old prompt", undefined, async state => {
+    if (fail) throw new Error("save-failed");
+    saved = state;
+  });
+  const next = { ...model, id: "other" };
+  await assert.rejects(agent.setModel(next, undefined, "new prompt"), /save-failed/);
+  t.mock.method(globalThis, "fetch", async (_url: unknown, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    assert.equal(body.model, "mock");
+    assert.equal(body.system, "old prompt");
+    return response(text("done").content);
+  });
+  fail = false;
+  await agent.prompt("question");
+  await agent.setModel(next, undefined, "new prompt");
+  assert.equal(saved!.model!.id, "other");
+  assert.equal(saved!.messages[0]!.content, "new prompt");
+  assert.equal(saved!.messages[1]!.content, "question");
+});

@@ -192,12 +192,15 @@ constructor(
     );
   }
 
-  async setModel(next: ModelConfig, signal?: AbortSignal): Promise<void> {
+  async setModel(next: ModelConfig, signal?: AbortSignal, systemPrompt: string = this.systemPrompt): Promise<void> {
     signal?.throwIfAborted();
     inputTokenBudget(next, this.limits);
+    const messages: Message[] = [{ role: "system", content: systemPrompt }, ...this.messages.slice(1)];
     await this.saveMessages?.(structuredClone({
-      messages: this.messages, context: this.checkpoint, model: selectionOf(next),
+      messages, context: this.checkpoint, model: selectionOf(next),
     }));
+    this.messages = messages;
+    this.systemPrompt = systemPrompt;
     this.model = structuredClone(next);
     this.calibration = undefined;
   }
