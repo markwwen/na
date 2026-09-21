@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="./assets/na.png" width="360" alt="na 娘" />
+  <img src="./assets/na.png"  alt="na 娘" />
 </p>
 
 > 呐（na）！有什么能为您服务的吗？
