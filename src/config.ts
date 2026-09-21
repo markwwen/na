@@ -184,23 +184,36 @@ export class ConfigCatalog {
 
   resolve(overrides: ResolveOptions = {}): ModelConfig {
     const s = this.settings;
-    let provider = overrides.provider ?? this.cli.provider ?? this.env.NA_PROVIDER ?? s.defaultProvider;
+    // 显式选择模型时，只保留同级或更高优先级的 provider；不继承旧的默认 provider。
+    let provider = overrides.provider ?? (overrides.model !== undefined ? undefined :
+      this.cli.provider ?? (this.cli.model !== undefined ? undefined : this.env.NA_PROVIDER ?? s.defaultProvider));
+    const explicitProvider = overrides.provider ?? (overrides.model === undefined ? this.cli.provider : undefined);
     let id = overrides.model ?? this.cli.model ?? this.env.NA_MODEL ?? this.env.ANTHROPIC_MODEL ?? this.env.ANTHROPIC_DEFAULT_MODEL ?? s.defaultModel;
     if (typeof id === "string" && ["opus", "sonnet", "haiku"].includes(id)) {
       id = this.env[`ANTHROPIC_DEFAULT_${id.toUpperCase()}_MODEL`];
       if (!id) throw new Error("模型别名尚未映射；请设置 ANTHROPIC_DEFAULT_*_MODEL 或使用完整 model ID");
     }
-    if (typeof id === "string" && !this.entries.some(e => e.provider === provider && e.id === id)) {
+    if (typeof id === "string" && !this.entries.some(e => (provider === undefined || e.provider === provider) && e.id === id)) {
       // 只把已注册的 provider 前缀视为限定名；保留模型 ID 自身的斜杠。
       const prefix = id.split("/")[0]!;
       if (id.includes("/") && this.entries.some(e => e.provider === prefix)) {
-        if (overrides.provider && overrides.provider !== prefix) throw new Error("provider 与 model 前缀冲突");
+        if (explicitProvider && explicitProvider !== prefix) throw new Error("provider 与 model 前缀冲突");
         provider = prefix; id = id.slice(prefix.length + 1);
       }
     }
-    const matches = this.entries.filter(e => (provider === undefined || e.provider === provider) && (id === undefined || e.id === id));
-    if (!matches.length) throw new Error("未找到模型。请配置 ~/.na/agent/models.json 和 settings.json，或使用 --config-source pi / claude");
-    if (matches.length !== 1) throw new Error("模型不唯一，请使用 provider/modelId");
+    let matches = this.entries.filter(e => (provider === undefined || e.provider === provider) && (id === undefined || e.id === id));
+    // 先匹配真实模型 ID；显式输入单模型 provider 的名称时，允许作为简写。
+    if (!matches.length && (overrides.model !== undefined || this.cli.model !== undefined) &&
+      typeof id === "string" && (provider === undefined || provider === id)) {
+      matches = this.entries.filter(e => e.provider === id);
+    }
+    if (!matches.length) {
+      const available = this.entries.slice(0, 10).map(e => `${e.provider}/${e.id}`).join("、");
+      throw new Error(`未找到模型：provider=${JSON.stringify(provider ?? "未限定")}，model=${JSON.stringify(id ?? "未指定")}。` +
+        (available ? `可用模型：${available}${this.entries.length > 10 ? " 等（/model 查看全部）" : ""}。请使用完整的 provider/modelId。` :
+          `未注册任何模型，请检查 ${join(this.configDir, "models.json")} 和 settings.json。`));
+    }
+    if (matches.length !== 1) throw new Error(`模型不唯一，请使用 provider/modelId：${matches.slice(0, 10).map(e => `${e.provider}/${e.id}`).join("、")}`);
     const selected = matches[0]!;
     const c = selected.config;
     if (c.api !== "anthropic-messages") throw new Error(`本版仅实现 anthropic-messages；${selected.provider}/${selected.id} 使用 ${String(c.api)}`);

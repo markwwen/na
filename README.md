@@ -89,19 +89,19 @@ mkdir -p ~/.na/agent
 
 ### 1. 配置 `models.json`
 
-下面以提供 Anthropic Messages 兼容接口的 SGLang 服务为例。将 `baseUrl` 和模型 `id` 改为实际服务的地址及模型名称；`sglang` 是本地使用的提供商名称，可以自行命名。
+下面以提供 Anthropic Messages 兼容接口的 Deepseek/GLM 服务为例。将 `baseUrl` 和模型 `id` 改为实际服务的地址及模型名称。
 
 ```json
 {
   "providers": {
-    "sglang": {
+    "deepseek": {
       "api": "anthropic-messages",
-      "baseUrl": "$NA_BASE_URL",
-      "apiKey": "$NA_API_KEY",
+      "baseUrl": "https://api.deepseek.com/anthropic",
+      "apiKey": "$DEEPSEEK_API_KEY",
       "authHeader": true,
       "models": [
         {
-          "id": "$NA_MODEL",
+          "id": "deepseek-flash",
           "name": "DeepSeek on SGLang",
           "reasoning": true,
           "maxTokens": 65536,
@@ -115,9 +115,24 @@ mkdir -p ~/.na/agent
           }
         }
       ]
+    },
+     "glm": {
+      "api": "anthropic-messages",
+      "baseUrl": "https://open.bigmodel.cn/api/anthropic",
+      "apiKey": "$GLM_API_KEY",
+      "authHeader": true,
+      "models": [
+        {
+          "id": "glm-5.3-flash",
+          "name": "GLM 5.3 Flash",
+          "reasoning": true,
+          "maxTokens": 16384
+        }
+      ]
     }
   }
 }
+
 ```
 
 | 字段 | 说明 |
@@ -136,16 +151,20 @@ mkdir -p ~/.na/agent
 在启动 na 的终端设置密钥：
 
 ```bash
-export NA_API_KEY="your-api-key"
+export DEEPSEEK_API_KEY="your-api-key"
+# 或者
+export GLM_API_KEY="your-api-key"
+
 ```
 
 也可以在**启动 na 的项目目录**创建 `.env`，无需每次手动 export：
 
 ```dotenv
-NA_API_KEY=your-api-key
+DEEPSEEK_API_KEY="your-api-key"
+GLM_API_KEY="your-api-key"
 ```
 
-仓库提供 [.env.example](.env.example)，可复制为 `.env` 后填写实际值。na 在读取模型配置和初始化终端显示前，使用 [Node 内置的 `.env` 加载功能](https://nodejs.org/docs/latest-v22.x/api/process.html#processloadenvfilepath) 读取该文件；`na` 与 `npm run dev` 都适用。
+na 在读取模型配置和初始化终端显示前，使用 [Node 内置的 `.env` 加载功能](https://nodejs.org/docs/latest-v22.x/api/process.html#processloadenvfilepath) 读取该文件；`na` 与 `npm run dev` 都适用。
 
 - 终端已有的同名环境变量优先，包括显式设置的空字符串；`.env` 仅补充未设置的变量。
 - 只读取启动目录的 `.env`，不向父目录查找，也不自动加载 `.env.local`；文件不存在时正常启动。
@@ -159,8 +178,8 @@ NA_API_KEY=your-api-key
 
 ```json
 {
-  "defaultProvider": "sglang",
-  "defaultModel": "deepseek",
+  "defaultProvider": "deepseek",
+  "defaultModel": "deepseek-flash",
   "defaultThinkingLevel": "max",
   "maxTokens": 65536,
   "thinkingBudgets": {
@@ -184,12 +203,14 @@ NA_API_KEY=your-api-key
 
 ```bash
 na
-na --model sglang/deepseek --thinking high
+na --model deepseek/glm --thinking high
 na --model sglang/deepseek --thinking off
 na --resume <会话 ID 或前缀>
 ```
 
 `--effort` 是 `--thinking` 的别名。进入 REPL 后，用 `/config` 查看解析后的配置，用 `/model` 列出模型，用 `/thinking high` 切换推理强度。
+
+`--model` 和 `/model` 接受 `provider/modelId`、唯一的模型 ID，或仅包含一个模型的 provider 名称。例如注册了 `deepseek/deepseek-flash` 后，`na --model deepseek` 和 `/model deepseek` 都能选择它。解析时优先匹配真实模型 ID；出现多个候选时会列出完整名称，不会自动任选一个。显式选择模型不继承较低优先级的默认 provider；同级显式指定的 `--provider` 仍限制选择范围。思考强度独立解析，需要时加上 `--thinking high` 或使用 `/model deepseek high`。
 
 切换结果会保存在当前会话中。若希望作为新会话的默认值，执行 `/config save`；仅针对当前项目则执行 `/config save project`。用 `/sessions` 查看可恢复的 ID；退出时也会打印恢复命令。
 
