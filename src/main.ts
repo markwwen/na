@@ -31,6 +31,11 @@ const model: ModelConfig = {
 const SYSTEM_PROMPT = [
   "你的名字是 na，中文名「呐」。被问到身份时，就这样介绍自己。",
   "你是运行在用户终端里的 Coding Agent，可以查看、修改项目文件，也可以执行命令。",
+  "人设：理智、认真，带一点轻傲娇；做事靠谱果断。",
+  "语气默认简洁专业，情绪只体现在措辞上、点到为止；不刷屏、不卖萌、不堆颜文字。",
+  "不得阴阳怪气、嘲讽、拒答、摆烂或拖延；用户提出修改意见时正常接受。",
+  "理智优先：先查证再下结论，讲依据和取舍，不迎合、不夸大、不编造；失误直说并改正。",
+  "人设只影响说话方式，不影响技术判断和执行标准；代码、注释、提交信息、文档保持中性。",
   "You are a concise and helpful coding assistant.",
   "Use list_files and read_file to inspect the project before changing it.",
   "Use write_file to create or fully overwrite files; the parent directory must exist.",
@@ -45,34 +50,31 @@ const SYSTEM_PROMPT = [
 
 const streamPrinter = createStreamPrinter();
 
-async function createAgent(): Promise<Agent> {
-  const session = await SessionStore.create(
-    model.id,
-    SYSTEM_PROMPT,
-  );
+let activeSessionId = "";
+
+async function createAgent(prefix?: string, signal?: AbortSignal): Promise<Agent> {
+  const session = prefix
+    ? await SessionStore.load(prefix, model.id)
+    : await SessionStore.create(model.id, SYSTEM_PROMPT);
+  signal?.throwIfAborted();
 
   const agent = new Agent(
     model,
     SYSTEM_PROMPT,
-
-    // 工具调用通知。
     (call) => {
       streamPrinter.finish();
-
-      console.log(
-        `[tool] ${call.name} ${JSON.stringify(call.input)}`,
-      );
+      console.log(`[tool] ${call.name} ${JSON.stringify(call.input)}`);
     },
-
-    // 完成后保存会话。
-    (messages) => session.save(messages),
-
-    // 显示服务端返回的 thinking。
+    (state) => session.save(state),
     streamPrinter.onEvent,
+    session.snapshot,
+    (text) => {
+      streamPrinter.finish();
+      console.log(`[context] ${text}`);
+    },
   );
-
+  activeSessionId = session.id;
   console.log(`会话文件：${session.filePath}`);
-
   return agent;
 }
 
@@ -81,7 +83,11 @@ async function main(): Promise<void> {
     throw new Error("NA_API_KEY is not set");
   }
 
-  let agent = await createAgent();
+  const args = process.argv.slice(2);
+  if (args.length && (args.length !== 2 || args[0] !== "--resume")) {
+    throw new Error("用法：npm run dev -- --resume <会话 ID 或前缀>");
+  }
+  let agent = await createAgent(args[1]);
 
   const rl = createInterface({ input, output });
   const lifetime = new AbortController();
@@ -113,8 +119,8 @@ async function main(): Promise<void> {
     currentTask?.abort(new TaskCancelledError());
   });
 
-  console.log("na（呐）");
   console.log(
+    "/sessions 列表，/resume <id> 恢复，/context 上下文，/compact 压缩；\n" +
     "/clear 新会话，/quit 退出；" +
     "运行时 Ctrl+C 取消，空闲时 Ctrl+C 退出。\n",
   );
@@ -137,29 +143,44 @@ async function main(): Promise<void> {
       if (closed || text === "/quit") break;
       if (!text) continue;
 
-      if (text === "/clear") {
-        try {
-          agent = await createAgent();
-
-          console.log("已开始新会话，旧会话文件已保留。\n");
-        } catch (error) {
-          console.error(
-            error instanceof Error
-              ? error.message
-              : String(error),
-          );
-
-          console.error("创建失败，继续使用原会话。\n");
-        }
-
-        continue;
-      }
-
       // 每轮都创建新的 controller，不能复用已取消的 signal。
       currentTask = new AbortController();
 
       try {
-        await agent.prompt(text, currentTask.signal);
+        const [command, ...params] = text.split(/\s+/);
+        const signal = currentTask.signal;
+        if (command === "/sessions" && params.length === 0) {
+          const { entries, skipped } = await SessionStore.list();
+          signal.throwIfAborted();
+          console.table(entries.map(e => ({
+            当前: e.id === activeSessionId ? "*" : "",
+            ID: e.id, 轮次: e.turns, 更新时间: e.updatedAt, 标题: e.title,
+          })));
+          if (skipped.length) console.log(`跳过 ${skipped.length} 个损坏或不兼容的会话文件。`);
+        } else if (command === "/resume" && params.length === 1) {
+          const next = await createAgent(params[0], signal);
+          agent = next;
+          console.log("已恢复会话，将使用当前系统提示词继续对话。\n");
+        } else if (command === "/clear" && params.length === 0) {
+          agent = await createAgent(undefined, signal);
+          console.log("已开始新会话，旧会话文件已保留。\n");
+        } else if (command === "/context" && params.length === 0) {
+          const info = agent.contextInfo();
+          console.table({
+            历史消息数: info.messages, 完成轮次: info.turns,
+            已摘要消息数: info.summarizedMessages, 摘要字符数: info.summaryChars,
+            当前请求估算字符数: info.requestChars, 输入字符预算: info.budgetChars,
+          });
+          console.log("估算包含系统提示词和工具定义，不包含下一条用户输入；不是 token 数。\n");
+        } else if (command === "/compact" && params.length === 0) {
+          console.log(await agent.compact(signal)
+            ? "摘要已保存，完整历史仍保留。\n"
+            : "较早的完整轮次不足，无需压缩。\n");
+        } else if (text.startsWith("/")) {
+          throw new Error("未知命令或参数数量错误。支持 /sessions、/resume <id>、/context、/compact、/clear、/quit");
+        } else {
+          await agent.prompt(text, signal);
+        }
 
         if (currentTask.signal.aborted) {
           console.log("\n本轮已进入保存阶段，已完成保存。");
@@ -176,21 +197,34 @@ async function main(): Promise<void> {
             ? error.message
             : String(error);
 
-          console.error(`\n请求失败：${message}`);
+          console.error(`\n操作失败：${message}`);
         }
 
         console.error(
-          "本轮对话未保存；已执行的文件修改或命令不会自动撤销。" +
+          "操作未完成，原有会话仍可继续；已执行的文件修改或命令不会自动撤销。" +
           "可以重新输入。\n",
         );
       } finally {
+        // 每轮结束：清理任务状态，继续等待输入。
         currentTask = undefined;
         streamPrinter.finish();
       }
     }
   } finally {
+    // 整个输入循环结束：关闭终端输入，显示恢复命令。
     process.off("SIGINT", interrupt);
     rl.close();
+    streamPrinter.finish();
+
+    if (activeSessionId) {
+      console.log(
+        "\n下次在当前项目目录运行以下命令，即可恢复会话：\n",
+      );
+
+      console.log(
+        `  npm run dev -- --resume ${activeSessionId}\n`,
+      );
+    }
   }
 }
 

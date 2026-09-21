@@ -1,3 +1,6 @@
+import { ContextManager, CONTEXT_LIMITS } from "./context.js";
+import { assertHistory, checkpointOf } from "./history.js";
+import type { ContextCheckpoint, SessionSnapshot } from "./history.js";
 import { callLLM } from "./client.js";
 import { executeTool, toolDefinitions } from "./tools.js";
 
@@ -13,15 +16,20 @@ const MAX_MODEL_CALLS = 20;
 
 export class Agent {
   private messages: Message[];
+  private checkpoint: ContextCheckpoint;
 
 constructor(
   private readonly model: ModelConfig,
   private readonly systemPrompt: string,
   private readonly onToolCall?: (call: ToolUseBlock) => void,
-  private readonly saveMessages?: (messages: Message[]) => Promise<void>,
+  private readonly saveMessages?: (state: SessionSnapshot) => Promise<void>,
   private readonly onStream?: (event: StreamEvent) => void,
+  initial?: SessionSnapshot,
+  private readonly onNotice?: (text: string) => void,
 ) {
-  this.messages = this.createInitialMessages();
+  this.messages = structuredClone(initial?.messages ?? this.createInitialMessages());
+  assertHistory(this.messages);
+  this.checkpoint = checkpointOf(initial?.context, this.messages);
 }
 
   async prompt(text: string, signal?: AbortSignal): Promise<string> {
@@ -37,10 +45,13 @@ constructor(
       { role: "user", content },
     ];
 
+    const context = this.createContext();
+
     for (let step = 0; step < MAX_MODEL_CALLS; step++) {
+      const input = await context.prepare(working, signal, { pendingTurn: true });
       const { message, stopReason } = await callLLM(
         this.model,
-        working,
+        input,
         toolDefinitions,
         this.onStream,
         signal,
@@ -111,9 +122,10 @@ constructor(
       signal?.throwIfAborted();
 
       // 保存与内存提交作为一个整体完成。
-      await this.saveMessages?.(structuredClone(working));
+      await this.saveMessages?.(structuredClone({ messages: working, context: context.checkpoint }));
 
       this.messages = working;
+      this.checkpoint = context.checkpoint;
 
       return answer;
 
@@ -126,6 +138,33 @@ constructor(
 
   reset(): void {
     this.messages = this.createInitialMessages();
+    this.checkpoint = { through: 1, summary: "" };
+  }
+
+  contextInfo() {
+    const context = this.createContext();
+    return {
+      budgetChars: CONTEXT_LIMITS.maxInputChars,
+      messages: this.messages.length,
+      turns: this.messages.filter(m => m.role === "user" && typeof m.content === "string").length,
+      summarizedMessages: this.checkpoint.through - 1,
+      summaryChars: this.checkpoint.summary.length,
+      requestChars: context.size(context.render(this.messages)),
+    };
+  }
+
+  async compact(signal?: AbortSignal): Promise<boolean> {
+    const context = this.createContext();
+    await context.prepare(this.messages, signal, { force: true });
+    if (context.checkpoint.through === this.checkpoint.through) return false;
+    signal?.throwIfAborted();
+    await this.saveMessages?.(structuredClone({ messages: this.messages, context: context.checkpoint }));
+    this.checkpoint = context.checkpoint;
+    return true;
+  }
+
+  private createContext(): ContextManager {
+    return new ContextManager(this.model, this.systemPrompt, toolDefinitions, this.checkpoint, this.onNotice);
   }
 
   private createInitialMessages(): Message[] {

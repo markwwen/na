@@ -1,84 +1,123 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { assertHistory, checkpointOf, object } from "./history.js";
+import type { SessionSnapshot } from "./history.js";
 
-import type { Message } from "./types.js";
-
-interface SessionMetadata {
+interface Metadata {
   version: 1;
   id: string;
   createdAt: string;
   cwd: string;
   modelId: string;
 }
+interface SessionData extends Metadata, SessionSnapshot { updatedAt: string; }
+export interface SessionEntry {
+  id: string;
+  updatedAt: string;
+  modelId: string;
+  turns: number;
+  title: string;
+}
+const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const directory = () => resolve(process.cwd(), ".na", "sessions");
+
+async function readSession(id: string): Promise<SessionData> {
+  if (!ID.test(id)) throw new Error("会话 ID 无效");
+  const path = join(directory(), `${id}.json`);
+  const info = await lstat(path);
+  if (!info.isFile() || info.size > 64 * 1024 * 1024) throw new Error("会话文件类型无效或超过 64 MiB");
+  const data = object(JSON.parse(await readFile(path, "utf8")));
+  if (data.version !== 1 || data.id !== id ||
+    typeof data.modelId !== "string" || !data.modelId || typeof data.cwd !== "string" ||
+    typeof data.createdAt !== "string" || !Number.isFinite(Date.parse(data.createdAt)) ||
+    typeof data.updatedAt !== "string" || !Number.isFinite(Date.parse(data.updatedAt))) {
+    throw new Error("会话元数据无效");
+  }
+  assertHistory(data.messages);
+  const context = checkpointOf(data.context, data.messages);
+  return { ...(data as unknown as SessionData), context };
+}
 
 export class SessionStore {
   private constructor(
     public readonly filePath: string,
-    private readonly metadata: SessionMetadata,
+    private readonly metadata: Metadata,
+    private state: SessionSnapshot,
   ) {}
 
-  static async create(
-    modelId: string,
-    systemPrompt: string,
-  ): Promise<SessionStore> {
-    const cwd = process.cwd();
-    const directory = resolve(cwd, ".na", "sessions");
+  get snapshot(): SessionSnapshot { return structuredClone(this.state); }
+  get id(): string { return this.metadata.id; }
 
-    await mkdir(directory, { recursive: true });
-
+  static async create(modelId: string, systemPrompt: string): Promise<SessionStore> {
+    await mkdir(directory(), { recursive: true });
     const id = randomUUID();
-
-    const session = new SessionStore(
-      join(directory, `${id}.json`),
-      {
-        version: 1,
-        id,
-        createdAt: new Date().toISOString(),
-        cwd,
-        modelId,
-      },
-    );
-
-    await session.save([
-      {
-        role: "system",
-        content: systemPrompt,
-      },
-    ]);
-
+    const state: SessionSnapshot = { messages: [{ role: "system", content: systemPrompt }] };
+    const session = new SessionStore(join(directory(), `${id}.json`), {
+      version: 1, id, modelId, cwd: process.cwd(), createdAt: new Date().toISOString(),
+    }, state);
+    await session.save(state);
     return session;
   }
 
-  async save(messages: Message[]): Promise<void> {
-    const data = {
-      ...this.metadata,
-      updatedAt: new Date().toISOString(),
-      messages,
-    };
+  static async list(): Promise<{ entries: SessionEntry[]; skipped: string[] }> {
+    let names: string[];
+    try { names = await readdir(directory()); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { entries: [], skipped: [] };
+      throw error;
+    }
+    const entries: SessionEntry[] = [];
+    const skipped: string[] = [];
+    for (const name of names.filter(n => n.endsWith(".json"))) {
+      try {
+        const data = await readSession(name.slice(0, -5));
+        const turns = data.messages.filter(m => m.role === "user" && typeof m.content === "string");
+        const title = typeof turns[0]?.content === "string" ? turns[0].content : "（空会话）";
+        entries.push({ id: data.id, updatedAt: data.updatedAt, modelId: data.modelId,
+          turns: turns.length, title: title.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").slice(0, 60) });
+      } catch { skipped.push(name); }
+    }
+    entries.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt) || a.id.localeCompare(b.id));
+    return { entries, skipped };
+  }
 
-    const temporaryPath = `${this.filePath}.${randomUUID()}.tmp`;
+  static async load(prefix: string, modelId: string): Promise<SessionStore> {
+    const key = prefix.toLowerCase();
+    if (!/^[0-9a-f-]{4,36}$/.test(key)) throw new Error("请输入完整 ID 或至少 4 位 ID 前缀");
+    let id = key;
+    if (!ID.test(key)) {
+      const { entries } = await this.list();
+      const matches = entries.filter(e => e.id.startsWith(key));
+      if (!matches.length) throw new Error("未找到可恢复的会话");
+      if (matches.length > 1) throw new Error("ID 前缀不唯一，请输入更多字符");
+      id = matches[0]!.id;
+    }
+    const data = await readSession(id);
+    if (data.modelId !== modelId) throw new Error(`此会话使用模型 ${data.modelId}；本版仅支持同模型恢复`);
+    const { version, createdAt, cwd } = data;
+    return new SessionStore(join(directory(), `${id}.json`),
+      { version, id, createdAt, cwd, modelId },
+      { messages: data.messages, context: data.context });
+  }
 
+  async save(state: SessionSnapshot): Promise<void> {
+    const next = structuredClone(state);
+    assertHistory(next.messages);
+    next.context = checkpointOf(next.context, next.messages);
+    const data = { ...this.metadata, updatedAt: new Date().toISOString(), ...next };
+    const serialized = JSON.stringify(data, null, 2) + "\n";
+    if (Buffer.byteLength(serialized, "utf8") > 64 * 1024 * 1024) throw new Error("会话超过 64 MiB，请新建会话");
+    const temporary = `${this.filePath}.${randomUUID()}.tmp`;
     try {
-      await writeFile(
-        temporaryPath,
-        JSON.stringify(data, null, 2) + "\n",
-        {
-          encoding: "utf8",
-          flag: "wx",
-          mode: 0o600,
-        },
-      );
-
-      // 完整写入临时文件后，再替换会话文件。
-      await rename(temporaryPath, this.filePath);
+      await writeFile(temporary, serialized, {
+        encoding: "utf8", flag: "wx", mode: 0o600,
+      });
+      await rename(temporary, this.filePath);
+      this.state = next;
     } catch (error) {
-      await rm(temporaryPath, { force: true }).catch(() => {});
-
-      const detail =
-        error instanceof Error ? error.message : String(error);
-
-      throw new Error(`会话保存失败：${detail}`);
+      await rm(temporary, { force: true }).catch(() => {});
+      throw new Error(`会话保存失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }
