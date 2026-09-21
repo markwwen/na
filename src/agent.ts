@@ -2,6 +2,7 @@ import { callLLM } from "./client.js";
 import { executeTool, toolDefinitions } from "./tools.js";
 
 import type {
+  StreamEvent,
   Message,
   ModelConfig,
   ToolResultBlock,
@@ -18,7 +19,7 @@ constructor(
   private readonly systemPrompt: string,
   private readonly onToolCall?: (call: ToolUseBlock) => void,
   private readonly saveMessages?: (messages: Message[]) => Promise<void>,
-  private readonly onThinking?: (text: string) => void,
+  private readonly onStream?: (event: StreamEvent) => void,
 ) {
   this.messages = this.createInitialMessages();
 }
@@ -40,16 +41,8 @@ constructor(
         this.model,
         working,
         toolDefinitions,
+        this.onStream,
       );
-      for (const block of message.content) {
-        if (block.type === "thinking") {
-          this.onThinking?.(
-            block.thinking || "[服务端未提供可显示的 thinking 文本]",
-          );
-        } else if (block.type === "redacted_thinking") {
-          this.onThinking?.("[服务端返回了不可显示的 thinking 块]");
-        }
-      }
 
       if (stopReason === "max_tokens") {
         throw new Error("模型输出被截断，本轮未完成");

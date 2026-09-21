@@ -1,4 +1,5 @@
 import { createInterface } from "node:readline/promises";
+import { createStreamPrinter } from "./renderer.js";
 import { stdin as input, stdout as output } from "node:process";
 
 import { Agent } from "./agent.js";
@@ -25,41 +26,8 @@ const SYSTEM_PROMPT = [
   "If a tool fails, explain the failure or correct the arguments.",
 ].join("\n");
 
-function printThinking(text: string): void {
-  const useColor =
-    output.isTTY &&
-    process.env.TERM !== "dumb" &&
-    process.env.NO_COLOR === undefined;
 
-  // 重定向到文件或禁用颜色时，输出普通文本。
-  if (!useColor) {
-    console.log(`\n[thinking]\n${text}\n`);
-    return;
-  }
-
-  const background = "\x1b[48;5;236m";
-  const foreground = "\x1b[38;5;252m";
-  const reset = "\x1b[0m";
-  const fillToEnd = "\x1b[K";
-
-  const lines = [
-    "",
-    "[thinking]",
-    "",
-    ...text.replace(/\r\n?/g, "\n").split("\n"),
-    "",
-  ];
-
-  const panel = lines
-    .map(
-      (line) =>
-        `${background}${foreground}  ${line}${fillToEnd}${reset}`,
-    )
-    .join("\n");
-
-  output.write(`\n${panel}\n\n`);
-}
-
+const streamPrinter = createStreamPrinter();
 
 async function createAgent(): Promise<Agent> {
   const session = await SessionStore.create(
@@ -73,8 +41,10 @@ async function createAgent(): Promise<Agent> {
 
     // 工具调用通知。
     (call) => {
+      streamPrinter.finish();
+
       console.log(
-        `\n[tool] ${call.name} ${JSON.stringify(call.input)}`,
+        `[tool] ${call.name} ${JSON.stringify(call.input)}`,
       );
     },
 
@@ -82,7 +52,7 @@ async function createAgent(): Promise<Agent> {
     (messages) => session.save(messages),
 
     // 显示服务端返回的 thinking。
-    (text) => printThinking(text),
+    streamPrinter.onEvent,
   );
 
   console.log(`会话文件：${session.filePath}`);
@@ -146,16 +116,20 @@ async function main(): Promise<void> {
     continue;
     }
 
-      try {
-        const answer = await agent.prompt(text);
-        console.log(`\n${answer}\n`);
-      } catch (error) {
-        const message =
-          error instanceof Error ? error.message : String(error);
+    try {
+      // 回答已经通过流事件显示，不再重复打印返回值。
+      await agent.prompt(text);
+    } catch (error) {
+      streamPrinter.finish();
 
-        console.error(`\n请求失败：${message}`);
-        console.error("本轮消息未保存，可以重新输入。\n");
-      }
+      const message =
+        error instanceof Error ? error.message : String(error);
+
+      console.error(`\n请求失败：${message}`);
+      console.error("本轮消息未保存，可以重新输入。\n");
+    } finally {
+      streamPrinter.finish();
+    }
     }
   } finally {
     rl.close();

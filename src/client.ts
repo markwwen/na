@@ -1,8 +1,10 @@
+import { readMessageStream } from "./stream.js";
+
 import type {
-  AssistantMessage,
   LLMResponse,
   Message,
   ModelConfig,
+  StreamEvent,
   ToolDefinition,
 } from "./types.js";
 
@@ -10,6 +12,7 @@ export async function callLLM(
   config: ModelConfig,
   messages: Message[],
   tools: ToolDefinition[] = [],
+  onEvent?: (event: StreamEvent) => void,
 ): Promise<LLMResponse> {
   const system = messages
     .filter((message) => message.role === "system")
@@ -45,7 +48,7 @@ export async function callLLM(
           effort: "max",
         },
 
-        stream: false,
+        stream: true,
       }),
     },
   );
@@ -56,54 +59,17 @@ export async function callLLM(
     );
   }
 
-  const data = (await response.json()) as {
-    content: AssistantMessage["content"];
-    stop_reason: string | null;
-  };
-
-  if (!Array.isArray(data.content)) {
-    throw new Error("模型响应缺少 content 数组");
+  if (!response.body) {
+    throw new Error("模型响应没有可读的流");
   }
 
-  // 本版仅支持文本和客户端工具调用，遇到其他内容块明确报错。
-  for (const block of data.content) {
-    if (block?.type === "text" && typeof block.text === "string") {
-      continue;
-    }
-
-    if (
-      block?.type === "tool_use" &&
-      typeof block.id === "string" &&
-      block.id.length > 0 &&
-      typeof block.name === "string" &&
-      "input" in block
-    ) {
-      continue;
-    }
-    if (
-      block?.type === "thinking" &&
-      typeof block.thinking === "string" &&
-      (block.signature === undefined ||
-        typeof block.signature === "string")
-    ) {
-      continue;
-    }
-
-    if (
-      block?.type === "redacted_thinking" &&
-      typeof block.data === "string"
-    ) {
-      continue;
-    }
-
-    throw new Error("模型返回了不支持或格式错误的内容块");
+  if (
+    !response.headers
+      .get("content-type")
+      ?.includes("text/event-stream")
+  ) {
+    throw new Error("服务端没有返回 SSE，请检查网关的流式支持");
   }
 
-  return {
-    message: {
-      role: "assistant",
-      content: data.content,
-    },
-    stopReason: data.stop_reason,
-  };
+  return readMessageStream(response.body, onEvent);
 }

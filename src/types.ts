@@ -69,3 +69,7 @@ export interface AgentTool extends ToolDefinition {
   execute: (input: unknown) => Promise<string>;
 }
 
+export type StreamEvent =
+  | { type: "start"; kind: "text" | "thinking" }
+  | { type: "delta"; kind: "text" | "thinking"; text: string }
+  | { type: "end"; kind: "text" | "thinking" };
