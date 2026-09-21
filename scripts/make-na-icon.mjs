@@ -22,9 +22,14 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SIZE = 512;
 const CENTER = SIZE / 2;
 
+// 配色取自 assets/na.png（偏粉带红），保持图标和 na 娘风格一致。
 const COLORS = {
-  shell: "#475569",
-  electron: "#7dd3fc",
+  background: "#ffffff",
+  border: "#d9b3b0",
+  shell: "#b89c9d",
+  electron: "#aa6464",
+  nucleusFrom: "#d99090",
+  nucleusTo: "#c5535b",
 };
 
 // 每个电子层：半径、电子数、第一颗电子的角度。
@@ -77,8 +82,8 @@ const nucleus =
 
 const body = [
   `<rect x="8" y="8" width="${SIZE - 16}" height="${SIZE - 16}" ` +
-    `rx="112" fill="url(#bg)" stroke="#334155" stroke-opacity="0.6" ` +
-    `stroke-width="2" />`,
+    `rx="112" fill="${COLORS.background}" stroke="${COLORS.border}" ` +
+    `stroke-opacity="0.8" stroke-width="2" />`,
   ...SHELLS.map(shellElement),
   ...SHELLS.map(electronsOf),
   nucleus,
@@ -89,13 +94,9 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${SIZE}" ` +
   `aria-labelledby="na-icon-title">
   <title id="na-icon-title">na 图标：钠原子的电子排布（K 2、L 8、M 1）</title>
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#18233b" />
-      <stop offset="100%" stop-color="#0b1220" />
-    </linearGradient>
     <radialGradient id="nucleus" cx="38%" cy="32%" r="78%">
-      <stop offset="0%" stop-color="#fb923c" />
-      <stop offset="100%" stop-color="#dc2626" />
+      <stop offset="0%" stop-color="${COLORS.nucleusFrom}" />
+      <stop offset="100%" stop-color="${COLORS.nucleusTo}" />
     </radialGradient>
   </defs>
   <!-- 由 scripts/make-na-icon.mjs 生成，请修改脚本后重新运行。 -->
