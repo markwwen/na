@@ -4,11 +4,26 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/main.ts",
-    "icon": "node scripts/make-na-icon.mjs"
+    "icon": "node scripts/make-na-icon.mjs",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "prepare": "npm run build"
   },
   "devDependencies": {
     "@types/node": "^24.13.5",
     "tsx": "^4.23.13",
     "typescript": "^5.9.3"
+  },
+  "bin": {
+    "na": "dist/main.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1"
   }
 }

@@ -1,3 +1,4 @@
+import { THINKING_LEVELS, type ModelSelection } from "./types.js";
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -34,6 +35,13 @@ async function readSession(id: string): Promise<SessionData> {
     typeof data.updatedAt !== "string" || !Number.isFinite(Date.parse(data.updatedAt))) {
     throw new Error("会话元数据无效");
   }
+  if (data.model !== undefined) {
+    const m = object(data.model);
+    if (typeof m.provider !== "string" || !m.provider || typeof m.id !== "string" || !m.id ||
+      !THINKING_LEVELS.includes(m.thinkingLevel as never) || Object.keys(m).some(k => !["provider", "id", "thinkingLevel"].includes(k))) {
+      throw new Error("会话模型选择信息无效");
+    }
+  }
   assertHistory(data.messages);
   const context = checkpointOf(data.context, data.messages);
   return { ...(data as unknown as SessionData), context };
@@ -48,11 +56,12 @@ export class SessionStore {
 
   get snapshot(): SessionSnapshot { return structuredClone(this.state); }
   get id(): string { return this.metadata.id; }
+  get modelId(): string { return this.state.model?.id ?? this.metadata.modelId; }
 
-  static async create(modelId: string, systemPrompt: string): Promise<SessionStore> {
+  static async create(modelId: string, systemPrompt: string, model?: ModelSelection): Promise<SessionStore> {
     await mkdir(directory(), { recursive: true });
     const id = randomUUID();
-    const state: SessionSnapshot = { messages: [{ role: "system", content: systemPrompt }] };
+    const state: SessionSnapshot = { model, messages: [{ role: "system", content: systemPrompt }] };
     const session = new SessionStore(join(directory(), `${id}.json`), {
       version: 1, id, modelId, cwd: process.cwd(), createdAt: new Date().toISOString(),
     }, state);
@@ -82,7 +91,7 @@ export class SessionStore {
     return { entries, skipped };
   }
 
-  static async load(prefix: string, modelId: string): Promise<SessionStore> {
+  static async load(prefix: string): Promise<SessionStore> {
     const key = prefix.toLowerCase();
     if (!/^[0-9a-f-]{4,36}$/.test(key)) throw new Error("请输入完整 ID 或至少 4 位 ID 前缀");
     let id = key;
@@ -94,18 +103,17 @@ export class SessionStore {
       id = matches[0]!.id;
     }
     const data = await readSession(id);
-    if (data.modelId !== modelId) throw new Error(`此会话使用模型 ${data.modelId}；本版仅支持同模型恢复`);
-    const { version, createdAt, cwd } = data;
+    const { version, createdAt, cwd, modelId } = data;
     return new SessionStore(join(directory(), `${id}.json`),
       { version, id, createdAt, cwd, modelId },
-      { messages: data.messages, context: data.context });
+      { messages: data.messages, context: data.context, model: data.model });
   }
 
   async save(state: SessionSnapshot): Promise<void> {
     const next = structuredClone(state);
     assertHistory(next.messages);
     next.context = checkpointOf(next.context, next.messages);
-    const data = { ...this.metadata, updatedAt: new Date().toISOString(), ...next };
+    const data = { ...this.metadata, modelId: next.model?.id ?? this.metadata.modelId, updatedAt: new Date().toISOString(), ...next };
     const serialized = JSON.stringify(data, null, 2) + "\n";
     if (Buffer.byteLength(serialized, "utf8") > 64 * 1024 * 1024) throw new Error("会话超过 64 MiB，请新建会话");
     const temporary = `${this.filePath}.${randomUUID()}.tmp`;

@@ -38,42 +38,143 @@
 | 交互 | 请求超时 | ✅ | 为请求和长时间无响应设置超时 |
 | 会话 | 会话列表与恢复 | ✅ | 查看历史会话并继续对话 |
 | 上下文 | 上下文管理 | ✅ | 控制历史长度、压缩较早的消息 |
-| 配置 | 模型与参数配置 | ⬜ | 在配置文件或 REPL 中切换模型和推理强度 |
-| CLI | `na` 命令入口 | ⬜ | 在任意项目目录启动 |
+| 配置 | 模型与参数配置 | ✅ | 在配置文件或 REPL 中切换模型和推理强度 |
+| CLI | `na` 命令入口 | ✅ | 在任意项目目录启动 |
 | 扩展 | 项目指令与自定义工具 | ⬜ | 加载项目说明并扩展工具能力 |
 
-## 快速开始
+## 安装
 
-开发环境：Node.js 22+、npm。
+需要 Node.js 22+、npm。当前命令执行工具支持 macOS / Linux。
+
+从源码安装：
 
 ```bash
 git clone git@github.com:markwwen/na.git
 cd na
 npm ci
+npm run typecheck
+npm run build
+npm link
+na --help
 ```
 
-配置模型服务：
+`npm link` 将当前仓库的 `dist/main.js` 注册为 `na` 命令。以后修改源码后，在仓库内重新执行 `npm run build`，命令即可使用新版本。如果 shell 提示找不到 `na`，检查 `$(npm prefix -g)/bin` 是否在 `PATH` 中。
+
+完成下面的模型配置后，可以在任意项目目录启动：
 
 ```bash
-export NA_BASE_URL="http://localhost:30000"
+cd /path/to/your-project
+na
+```
+
+工具操作和会话保存均以启动时的目录为基准。
+
+## 配置模型
+
+全局配置分为两个文件：
+
+| 文件 | 用途 |
+|---|---|
+| `~/.na/agent/models.json` | 注册提供商、服务地址、认证方式及模型能力 |
+| `~/.na/agent/settings.json` | 选择默认模型、推理强度、输出预算和超时 |
+
+先创建目录，再将下面的 JSON 分别保存到对应文件；已有配置时合并需要的字段：
+
+```bash
+mkdir -p ~/.na/agent
+```
+
+### 1. 配置 `models.json`
+
+下面以提供 Anthropic Messages 兼容接口的 SGLang 服务为例。将 `baseUrl` 和模型 `id` 改为实际服务的地址及模型名称；`sglang` 是本地使用的提供商名称，可以自行命名。
+
+```json
+{
+  "providers": {
+    "sglang": {
+      "api": "anthropic-messages",
+      "baseUrl": "$NA_BASE_URL",
+      "apiKey": "$NA_API_KEY",
+      "authHeader": true,
+      "models": [
+        {
+          "id": "$NA_MODEL",
+          "name": "DeepSeek on SGLang",
+          "reasoning": true,
+          "maxTokens": 65536,
+          "thinkingLevelMap": {
+            "minimal": null,
+            "low": null,
+            "medium": null,
+            "high": "high",
+            "xhigh": null,
+            "max": "max"
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `api` | 当前只支持 `anthropic-messages` |
+| `baseUrl` | 可填写服务根地址、以 `/v1` 结尾的地址或完整 `/v1/messages` 地址，程序会规范化请求路径 |
+| `apiKey` | `$NA_API_KEY` 表示读取同名环境变量；也支持 `${NA_API_KEY}`。普通字符串按字面值使用 |
+| `authHeader` | `true` 使用 `Authorization: Bearer …`；`false` 或省略时使用 `x-api-key` |
+| `models[].id` | 请求发送的模型名称，必须与服务端一致 |
+| `models[].reasoning` | 是否允许开启 thinking；不支持推理时设为 `false`，并选择 `off` |
+| `models[].maxTokens` | 本地声明的最大输出 token 上限，应按服务能力填写 |
+| `models[].thinkingLevelMap` | 将 na 推理档位映射到请求的 `output_config.effort`；`null` 表示该档位不可用 |
+
+示例声明了 `off`、`high`、`max` 三个可选档位；其中 `high`、`max` 需要服务端支持对应的 effort 值。按实际部署调整映射。若服务只接受 `thinking.budget_tokens`，可删除 `thinkingLevelMap`，并在设置中选择 `high` 等普通档位；`xhigh` 和 `max` 必须显式声明映射才能使用。
+
+在启动 na 的终端设置密钥：
+
+```bash
 export NA_API_KEY="your-api-key"
 ```
 
-将地址和密钥替换为实际配置。`NA_BASE_URL` 应为服务根地址，程序会追加 `/v1/messages`。
+引用的环境变量为空或未设置时，选择该模型会报错。服务无需认证时，将 `apiKey` 改为 `""`。程序不会自动加载 `.env` 文件。
 
-启动：
+### 2. 配置 `settings.json`
 
-```bash
-npm run dev
+```json
+{
+  "defaultProvider": "sglang",
+  "defaultModel": "deepseek",
+  "defaultThinkingLevel": "max",
+  "maxTokens": 65536,
+  "thinkingBudgets": {
+    "high": 4096,
+    "max": 4096
+  },
+  "requestTimeoutMs": 300000,
+  "idleTimeoutMs": 60000
+}
 ```
 
-恢复历史会话：
+`defaultProvider` 和 `defaultModel` 必须对应 `models.json` 中的名称。这里保留了最初版本的 `budget_tokens: 4096` 和 `effort: "max"`。
+
+`models.json` 中的 `reasoning: true` 只声明模型支持推理，不会自动开启 thinking。未指定推理强度时默认使用 `off`；要默认开启，需要设置 `defaultThinkingLevel`。如果恢复的旧会话保存了 `off`，进入 REPL 后执行 `/thinking max`，或启动时使用 `na --resume <id> --thinking max` 覆盖。
+
+`thinkingBudgets` 控制各档位的推理 token 预算上限，不保证模型一定输出这么长的 thinking。`maxTokens` 是包含 thinking 的总输出预算，不能超过模型声明的上限；请求层会为回答预留至少 1024 个 token。启用预算模式的 thinking 时，`maxTokens` 至少为 2048。
+
+`requestTimeoutMs` 是每次模型请求的总超时；`idleTimeoutMs` 是连续未收到网络数据的超时，SSE 心跳也会刷新它。两者单位均为毫秒，取值范围为 1～2147483647。
+
+### 3. 启动与切换
 
 ```bash
-npm run dev -- --resume <会话 ID 或前缀>
+na
+na --model sglang/deepseek --thinking high
+na --model sglang/deepseek --thinking off
+na --resume <会话 ID 或前缀>
 ```
 
-用 `/sessions` 查看可用 ID；退出程序时也会打印当前会话的恢复命令。
+`--effort` 是 `--thinking` 的别名。进入 REPL 后，用 `/config` 查看解析后的配置，用 `/model` 列出模型，用 `/thinking high` 切换推理强度。
+
+切换结果会保存在当前会话中。若希望作为新会话的默认值，执行 `/config save`；仅针对当前项目则执行 `/config save project`。用 `/sessions` 查看可恢复的 ID；退出时也会打印恢复命令。
 
 示例输入：
 
@@ -89,31 +190,58 @@ npm run dev -- --resume <会话 ID 或前缀>
 
 | 命令 | 作用 |
 |---|---|
+| `/model` | 列出可用模型及当前选择 |
+| `/model <provider/id> [thinking]` | 切换当前会话的模型，可同时指定推理强度 |
+| `/thinking [level]`、`/effort [level]` | 查看或切换推理强度，具体可用档位由模型配置决定 |
+| `/config`、`/settings` | 查看当前配置和查找的文件路径，不显示密钥及自定义请求头的值 |
+| `/config save` | 将当前模型和推理强度保存为全局默认值 |
+| `/config save project` | 将当前选择保存到项目的 `.na/settings.local.json` |
 | `/sessions` | 列出历史会话：轮次、更新时间、标题；跳过损坏或不兼容的文件 |
-| `/resume <id>` | 恢复指定会话，支持完整 ID 或至少 4 位前缀；前缀不唯一或模型不同时拒绝 |
+| `/resume <id>` | 恢复指定会话及其模型选择，支持完整 ID 或至少 4 位唯一前缀 |
 | `/context` | 显示历史消息数、完成轮次、摘要覆盖范围和当前请求估算字符数 |
 | `/compact` | 手动压缩较早的对话；可压缩的完整轮次不足时不做改动 |
 | `/clear` | 开始新会话，保留旧会话文件 |
 | `/quit` | 退出程序 |
 | `Ctrl+C` | 任务执行中取消当前任务；空闲时退出程序 |
 
-## 配置
+## 配置覆盖与迁移
 
-| 配置项 | 位置 | 当前行为 |
+配置文件按以下顺序合并，后面的同名字段覆盖前面的字段：
+
+1. 显式指定 `--config-source pi` 或 `--config-source claude` 时读取的外部配置。
+2. `~/.na/agent/settings.json`。
+3. 启动目录中的 `.na/settings.json`。
+4. 启动目录中的 `.na/settings.local.json`。
+5. `--settings <path>` 指定的额外文件。
+
+项目配置按启动目录查找，不向父目录查找。`models.json` 从全局配置目录读取，不读取项目中的同名文件。配置支持 JSONC 注释和尾逗号；`/config save` 会保留其他配置字段，但重新写为不带注释的 JSON。
+
+新会话的模型与推理强度选择优先级为：REPL 显式切换 > CLI 参数 > 对应环境变量 > 配置文件。配置中的 `modelThinkingLevels["provider/id"]` 优先于 `defaultThinkingLevel`；`/config save` 会同时保存这两个字段。恢复会话时优先使用会话保存的模型与推理强度，也可在启动时用 `--model`、`--thinking` 显式覆盖。
+
+| 环境变量 | 用途 | 说明 |
 |---|---|---|
-| `NA_BASE_URL` | 环境变量 | 模型服务根地址，程序会追加 `/v1/messages`；未设置时回落到 `src/main.ts` 中的内置地址 |
-| `NA_API_KEY` | 环境变量 | 必填的认证密钥；未设置时启动直接报错 |
-| `NA_REQUEST_TIMEOUT_MS` | 环境变量 | 单次模型请求的总超时，默认 `300000` 毫秒 |
-| `NA_IDLE_TIMEOUT_MS` | 环境变量 | 连续未收到服务端数据的超时，默认 `60000` 毫秒 |
-| `NO_COLOR` | 环境变量 | 设置后 thinking 不再使用灰底；`TERM=dumb` 或输出非 TTY 时同样降级为纯文本 |
-| 模型名称 | `src/main.ts` | 当前为 `deepseek`，应与服务端模型名称或别名对应 |
-| `maxTokens` | `src/main.ts` | 当前为 `65536` |
-| System 提示词 | `src/main.ts` | 常量 `SYSTEM_PROMPT`，定义 Agent 身份（na / 呐）、语气人设与工作约束 |
-| Thinking 配置 | `src/client.ts` | 当前显式开启，`budget_tokens: 4096` |
-| 推理强度 | `src/client.ts` | 当前为 `output_config.effort: "max"` |
-| 上下文预算 | `src/context.ts` | `CONTEXT_LIMITS`：输入上限 120000 字符、保留最近 2 轮、单批摘要输入 24000 字符、摘要上限 6000 字符 |
+| `NA_CONFIG_DIR` | 全局配置目录 | 替代默认的 `~/.na/agent` |
+| `NA_PROVIDER`、`NA_MODEL` | 默认提供商和模型 | 覆盖配置文件的默认选择 |
+| `NA_THINKING_LEVEL` | 默认推理强度 | 被 CLI 参数和 REPL 显式切换覆盖 |
+| `NA_MAX_TOKENS` | 总输出预算 | 被 `--max-tokens` 覆盖，不得超过模型声明的上限 |
+| `NA_BASE_URL` | 无模型目录时的服务地址 | 只用于未注册模型时的单网关回退；不会覆盖 `models.json` 的 `baseUrl` |
+| `NA_API_KEY` | 服务密钥 | 上述示例通过 `$NA_API_KEY` 引用；单网关回退时也会读取 |
+| `NA_REQUEST_TIMEOUT_MS` | 单次模型请求的总超时 | 覆盖 `requestTimeoutMs`，默认 `300000` 毫秒 |
+| `NA_IDLE_TIMEOUT_MS` | 连续无网络数据的超时 | 覆盖 `idleTimeoutMs`，默认 `60000` 毫秒 |
+| `NO_COLOR` | 关闭 thinking 灰底 | `TERM=dumb` 或输出非 TTY 时也使用纯文本 |
 
-两个超时都必须是 1～2147483647 之间的整数毫秒，否则请求前就会报错。模型名称、上下文预算和推理参数目前需要修改代码，尚未提供 REPL 配置命令。
+已有其他工具的配置时，可显式尝试导入：
+
+```bash
+na --config-source pi
+na --config-source claude
+```
+
+na 的导入器读取 Pi 的 `~/.pi/agent/settings.json`、`models.json` 和项目 `.pi/settings.json`，或 Claude Code 的 `~/.claude/settings.json` 和项目 `.claude/settings.json`、`.claude/settings.local.json`。也支持通过 `PI_CODING_AGENT_DIR`、`CLAUDE_CONFIG_DIR` 指定导入目录。导入只读，保存配置仍写入 na 自己的目录。
+
+目前兼容常用模型字段及 `model`、`effortLevel` 别名，模型请求仅支持 `anthropic-messages`；不导入内置模型目录、OAuth 登录、hooks 或权限配置，也不执行 `!command` 凭据命令。`settings.env` 仅参与请求配置解析，不注入工具命令环境，且同名进程环境变量优先。
+
+System 提示词仍在 `src/main.ts` 的 `SYSTEM_PROMPT` 中。上下文预算仍在 `src/context.ts` 的 `CONTEXT_LIMITS` 中：输入上限 120000 字符、保留最近 2 轮、单批摘要输入 24000 字符、摘要上限 6000 字符。
 
 ## 工作流程
 
@@ -148,7 +276,7 @@ Agent 组织历史消息和工具定义
 | `read_file` | `{"path":"src/agent.ts"}` | 读取 UTF-8 文本；文件不超过 128 KiB，最多返回前 20000 个字符 |
 | `write_file` | `{"path":"agent-demo.txt","content":"hello na"}` | 创建或完整覆盖 UTF-8 文件；父目录须已存在；最多 128 KiB；不支持符号链接目标 |
 | `edit_file` | `{"path":"src/main.ts","old_text":"...","new_text":"..."}` | 精确替换唯一匹配的 `old_text`；匹配零处或多处均失败；`new_text` 为空表示删除 |
-| `run_command` | `{"command":"npx tsc --noEmit -p src/tsconfig.json"}` | 通过 `/bin/sh` 执行非交互命令；默认超时 60 秒，最多 300 秒；stdout/stderr 各保留前 32 KiB；非零退出码或超时视为工具错误；仅支持 macOS / Linux |
+| `run_command` | `{"command":"npm run typecheck"}` | 通过 `/bin/sh` 执行非交互命令；默认超时 60 秒，最多 300 秒；stdout/stderr 各保留前 32 KiB；非零退出码或超时视为工具错误；仅支持 macOS / Linux |
 
 路径以程序启动时的工作目录为基准。工具会解析真实路径，并检查目标是否位于工作目录内；`run_command` 的 `cwd` 同样受此限制。
 
@@ -168,6 +296,7 @@ Agent 组织历史消息和工具定义
 - 用户输入。
 - 模型文本和 thinking 内容。
 - 工具调用及执行结果。
+- 当前选择的提供商、模型 ID 和推理强度；不保存模型配置中的密钥。
 
 每轮完成后，程序先写入临时文件，再替换会话文件。
 
@@ -175,15 +304,19 @@ Agent 组织历史消息和工具定义
 
 默认启动会创建新会话，不会自动加载旧记录；用 `--resume <会话 ID 或前缀>` 启动，或在 REPL 中用 `/sessions` 查看、`/resume <id>` 切换，即可继续历史会话。
 
-恢复要求会话记录中的模型与当前模型一致，单个会话文件上限为 64 MiB。
+恢复时按当前配置解析会话保存的模型，因此对应的模型定义和认证仍需可用。旧会话只有模型 ID 时，会尝试在模型目录中唯一匹配；无法匹配时，可在启动时用 `--model provider/id` 指定。单个会话文件上限为 64 MiB。
 
 ## 项目结构
 
 ```text
 assets/            # README 用图（na.png 形象、na-icon.svg 图标）
 scripts/           # 辅助脚本，make-na-icon.mjs 生成图标
+tsconfig.json      # TypeScript 配置，编译 src 到 dist
 src/
 ├── main.ts         # REPL、配置与模块连接
+├── cli.ts          # CLI 参数解析与帮助
+├── config.ts       # 配置加载、合并与默认值保存
+├── model.ts        # 模型选择、请求参数与历史推理处理
 ├── agent.ts        # 对话状态与工具调用循环
 ├── client.ts       # 模型 HTTP 请求
 ├── stream.ts       # SSE 解析与完整消息拼接
@@ -195,8 +328,7 @@ src/
 ├── context.ts      # 上下文预算与摘要压缩
 ├── history.ts      # 消息历史校验与摘要检查点
 ├── session.ts      # 会话创建与 JSON 保存
-├── types.ts        # 消息、工具及事件类型
-└── tsconfig.json
+└── types.ts        # 模型、消息、工具及事件类型
 ```
 
 ## 开发
@@ -204,13 +336,26 @@ src/
 运行类型检查：
 
 ```bash
-npx tsc --noEmit -p src/tsconfig.json
+npm run typecheck
 ```
 
 启动开发版本：
 
 ```bash
 npm run dev
+```
+
+传入启动参数：
+
+```bash
+npm run dev -- --model sglang/deepseek --thinking high
+npm run dev -- --resume <会话 ID 或前缀>
+```
+
+更新已链接的 `na` 命令：
+
+```bash
+npm run build
 ```
 
 重新生成 README 图标：

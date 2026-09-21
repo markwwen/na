@@ -1,5 +1,12 @@
 import { RequestTimeoutError } from "./control.js";
 import { readMessageStream } from "./stream.js";
+import {
+  messagesUrl,
+  reasoningParameters,
+  replayMessages,
+  requestHeaders,
+} from "./model.js";
+
 
 import type {
   LLMResponse,
@@ -60,16 +67,11 @@ export async function callLLM(
     touch();
 
     const response = await fetch(
-      `${config.baseUrl.replace(/\/+$/, "")}/v1/messages`,
+      messagesUrl(config.baseUrl),
       {
         method: "POST",
         signal: controller.signal,
-
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${config.apiKey}`,
-          "anthropic-version": "2023-06-01",
-        },
+        headers: requestHeaders(config),
 
         body: JSON.stringify({
           model: config.id,
@@ -79,19 +81,12 @@ export async function callLLM(
             .map(m => m.content)
             .join("\n\n"),
 
-          messages: messages.filter(m => m.role !== "system"),
+          messages: replayMessages(messages)
+            .filter(m => m.role !== "system"),
+
           max_tokens: config.maxTokens,
           tools,
-
-          thinking: {
-            type: "enabled",
-            budget_tokens: 4096,
-          },
-
-          output_config: {
-            effort: "max",
-          },
-
+          ...reasoningParameters(config),
           stream: true,
         }),
       },

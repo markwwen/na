@@ -1,13 +1,24 @@
-export interface ModelConfig {
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ThinkingLevel = typeof THINKING_LEVELS[number];
+
+// 会话中只保存选择信息，不保存密钥或请求头。
+export interface ModelSelection {
+  provider: string;
   id: string;
+  thinkingLevel: ThinkingLevel;
+}
+
+export interface ModelConfig extends ModelSelection {
+  api: "anthropic-messages";
   baseUrl: string;
   apiKey: string;
+  authHeader: boolean;
+  headers: Record<string, string>;
   maxTokens: number;
-
-  thinking?: {
-    type: "enabled";
-    budget_tokens: number;
-  };
+  thinkingMode: "budget" | "adaptive";
+  thinkingBudget?: number;
+  effort?: string;
+  temperature?: number;
   requestTimeoutMs?: number;
   idleTimeoutMs?: number;
 }
@@ -78,5 +89,3 @@ export type StreamEvent =
   | { type: "start"; kind: "text" | "thinking" }
   | { type: "delta"; kind: "text" | "thinking"; text: string }
   | { type: "end"; kind: "text" | "thinking" };
-
-

@@ -1,4 +1,4 @@
-import type { Message } from "./types.js";
+import type { Message, ModelSelection } from "./types.js";
 
 export interface ContextCheckpoint {
   // 摘要覆盖 messages[1..through)，不包含最初的 system。
@@ -7,6 +7,7 @@ export interface ContextCheckpoint {
 }
 
 export interface SessionSnapshot {
+  model?: ModelSelection;
   messages: Message[];
   context?: ContextCheckpoint;
 }

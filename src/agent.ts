@@ -1,3 +1,4 @@
+import { selectionOf } from "./model.js";
 import { ContextManager, CONTEXT_LIMITS } from "./context.js";
 import { assertHistory, checkpointOf } from "./history.js";
 import type { ContextCheckpoint, SessionSnapshot } from "./history.js";
@@ -19,7 +20,7 @@ export class Agent {
   private checkpoint: ContextCheckpoint;
 
 constructor(
-  private readonly model: ModelConfig,
+  private model: ModelConfig,
   private readonly systemPrompt: string,
   private readonly onToolCall?: (call: ToolUseBlock) => void,
   private readonly saveMessages?: (state: SessionSnapshot) => Promise<void>,
@@ -122,7 +123,7 @@ constructor(
       signal?.throwIfAborted();
 
       // 保存与内存提交作为一个整体完成。
-      await this.saveMessages?.(structuredClone({ messages: working, context: context.checkpoint }));
+      await this.saveMessages?.(structuredClone({ messages: working, context: context.checkpoint, model: selectionOf(this.model) }));
 
       this.messages = working;
       this.checkpoint = context.checkpoint;
@@ -134,6 +135,14 @@ constructor(
     throw new Error(
       `本轮已达到 ${MAX_MODEL_CALLS} 次模型请求上限`,
     );
+  }
+
+  async setModel(next: ModelConfig, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    await this.saveMessages?.(structuredClone({
+      messages: this.messages, context: this.checkpoint, model: selectionOf(next),
+    }));
+    this.model = structuredClone(next);
   }
 
   reset(): void {
@@ -158,7 +167,7 @@ constructor(
     await context.prepare(this.messages, signal, { force: true });
     if (context.checkpoint.through === this.checkpoint.through) return false;
     signal?.throwIfAborted();
-    await this.saveMessages?.(structuredClone({ messages: this.messages, context: context.checkpoint }));
+    await this.saveMessages?.(structuredClone({ messages: this.messages, context: context.checkpoint, model: selectionOf(this.model) }));
     this.checkpoint = context.checkpoint;
     return true;
   }

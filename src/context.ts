@@ -121,7 +121,7 @@ export class ContextManager {
         { role: "user", content: JSON.stringify({ previousSummary: summary, records: batches[index] }) },
       ];
       if (this.size(request) > this.limits.maxInputChars) throw new Error("摘要输入超过预算");
-      const response = await callLLM({ ...this.model, maxTokens: 8192 }, request, [], undefined, signal);
+      const response = await callLLM({ ...this.model, maxTokens: Math.min(this.model.maxTokens, Math.max(8192, (this.model.thinkingBudget ?? 0) + 4096)) }, request, [], undefined, signal);
       if (!["end_turn", "stop_sequence"].includes(response.stopReason ?? "") ||
         response.message.content.some(b => b.type === "tool_use")) {
         throw new Error("摘要生成未正常完成，本次压缩未提交");
