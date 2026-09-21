@@ -9,7 +9,7 @@ import type {
   ToolUseBlock,
 } from "./types.js";
 
-const MAX_MODEL_CALLS = 8;
+const MAX_MODEL_CALLS = 20;
 
 export class Agent {
   private messages: Message[];

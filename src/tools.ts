@@ -1,3 +1,5 @@
+import { fileTools } from "./file-tools.js";
+import { commandTool } from "./command-tool.js";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { abortable } from "./control.js";
@@ -48,6 +50,8 @@ const registeredTools: AgentTool[] = [
     },
     execute: listFiles,
   },
+  ...fileTools,
+  commandTool,
 ];
 
 // 发给模型的只有说明和参数结构。
@@ -188,16 +192,19 @@ export async function executeTool(
       throw new Error(`未知工具：${call.name}`);
     }
 
+    // 等待工具自己完成取消和清理。
+    // 写入和命令执行不能只通过 abortable 停止等待。
+    const content = await tool.execute(call.input, signal);
+
+    signal?.throwIfAborted();
+
     return {
       type: "tool_result",
       tool_use_id: call.id,
-      content: await abortable(
-        () => tool.execute(call.input, signal),
-        signal,
-      ),
+      content,
     };
   } catch (error) {
-    // 取消必须终止 agent 循环，不能作为工具失败发回模型。
+    // 用户取消中断整轮；普通工具错误交回模型处理。
     signal?.throwIfAborted();
 
     return {

@@ -1,8 +1,18 @@
 # na
 
+> 呐（na）—— 会读你的项目、动手改文件的终端 Coding Agent。
+
 一个使用 TypeScript 从零实现的轻量级终端 Coding Agent，参考 Pi 的能力逐步迭代，用于学习模型调用、工具执行、流式交互和会话管理。
 
-当前可以在终端中与模型对话，让模型自主查看目录、读取代码并分析项目，同时显示 thinking 和工具调用过程。
+当前可以在终端中与模型对话，让模型自主查看目录、读取和修改代码、执行类型检查和测试，同时显示 thinking 和工具调用过程。
+
+## 关于 na
+
+**na**，中文名**呐**，是一个跑在终端里的 Coding Agent。
+
+它的身份定义在 `src/main.ts` 的 `SYSTEM_PROMPT` 常量中：启动时作为 system 消息发给模型，并写入会话文件的第一条消息。可以在会话里直接问它「你叫什么」来验证。
+
+想改名字或人设，改这个常量即可，重启或执行 `/clear` 后生效。
 
 ## 功能进度
 
@@ -20,17 +30,17 @@
 | 工具 | 工具注册表 | ✅ | 统一管理工具说明、参数和执行函数 |
 | 工具 | `list_files` | ✅ | 查看目录中的文件和子目录 |
 | 工具 | `read_file` | ✅ | 读取项目中的文本文件 |
+| 工具 | `write_file` | ✅ | 创建或覆盖文件，写入前检查父目录 |
+| 工具 | `edit_file` | ✅ | 精确替换文件中的唯一匹配内容 |
+| 工具 | `run_command` | ✅ | 执行类型检查、测试等非交互命令 |
 | Agent | 工具调用循环 | ✅ | 请求模型、执行工具、回传结果，直到完成 |
 | Agent | 工具错误回传 | ✅ | 将执行错误作为工具结果交给模型 |
-| Agent | 模型请求次数限制 | ✅ | 每轮最多发起 8 次模型请求 |
+| Agent | 模型请求次数限制 | ✅ | 每轮最多发起 20 次模型请求 |
 | Agent | 流异常处理 | ✅ | 检测错误事件和连接提前结束 |
 | 会话 | JSON 会话保存 | ✅ | 每轮完成后保存完整消息历史 |
 | 会话 | 新建会话 | ✅ | 启动或 `/clear` 时创建新会话，保留旧文件 |
 | 交互 | 取消当前任务 | ✅ | 中断正在进行的模型请求和工具执行 |
 | 交互 | 请求超时 | ✅ | 为请求和长时间无响应设置超时 |
-| 工具 | `write_file` | ⬜ | 创建或写入文件 |
-| 工具 | `edit_file` | ⬜ | 精确替换文件中的指定内容 |
-| 工具 | 命令执行 | ⬜ | 执行类型检查、测试等命令 |
 | 会话 | 会话列表与恢复 | ⬜ | 查看历史会话并继续对话 |
 | 上下文 | 上下文管理 | ⬜ | 控制历史长度、压缩较早的消息 |
 | 配置 | 模型与参数配置 | ⬜ | 在配置文件或 REPL 中切换模型和推理强度 |
@@ -80,8 +90,7 @@ npm run dev
 |---|---|
 | `/clear` | 开始新会话，保留旧会话文件 |
 | `/quit` | 退出程序 |
-
-目前尚未实现任务执行过程中的交互式取消。
+| `Ctrl+C` | 任务执行中取消当前任务；空闲时退出程序 |
 
 ## 配置
 
@@ -91,6 +100,7 @@ npm run dev
 | `NA_API_KEY` | 环境变量 | 必填的认证密钥 |
 | 模型名称 | `src/main.ts` | 当前为 `deepseek`，应与服务端模型名称或别名对应 |
 | `maxTokens` | `src/main.ts` | 当前为 `65536` |
+| System 提示词 | `src/main.ts` | 常量 `SYSTEM_PROMPT`，定义 Agent 身份（na / 呐）与工作约束 |
 | Thinking 配置 | `src/client.ts` | 当前显式开启 |
 | 推理强度 | `src/client.ts` | 当前为 `output_config.effort: "max"` |
 
@@ -127,8 +137,11 @@ Agent 组织历史消息和工具定义
 |---|---|---|
 | `list_files` | `{"path":"."}` | 列出直接子项，不递归；包含隐藏项，最多返回 100 项 |
 | `read_file` | `{"path":"src/agent.ts"}` | 读取 UTF-8 文本；文件不超过 128 KiB，最多返回前 20000 个字符 |
+| `write_file` | `{"path":"agent-demo.txt","content":"hello na"}` | 创建或完整覆盖 UTF-8 文件；父目录须已存在；最多 128 KiB；不支持符号链接目标 |
+| `edit_file` | `{"path":"src/main.ts","old_text":"...","new_text":"..."}` | 精确替换唯一匹配的 `old_text`；匹配零处或多处均失败；`new_text` 为空表示删除 |
+| `run_command` | `{"command":"npx tsc --noEmit -p src/tsconfig.json"}` | 通过 `/bin/sh` 执行非交互命令；默认超时 60 秒，最多 300 秒；stdout/stderr 各保留前 32 KiB；非零退出码或超时视为工具错误；仅支持 macOS / Linux |
 
-路径以程序启动时的工作目录为基准。工具会解析真实路径，并检查目标是否位于工作目录内。
+路径以程序启动时的工作目录为基准。工具会解析真实路径，并检查目标是否位于工作目录内；`run_command` 的 `cwd` 同样受此限制。
 
 ## 会话保存
 
@@ -157,14 +170,17 @@ Agent 组织历史消息和工具定义
 
 ```text
 src/
-├── main.ts       # REPL、配置与模块连接
-├── agent.ts      # 对话状态与工具调用循环
-├── client.ts     # 模型 HTTP 请求
-├── stream.ts     # SSE 解析与完整消息拼接
-├── renderer.ts   # 流式终端显示与 thinking 样式
-├── tools.ts      # 工具定义、注册与执行
-├── session.ts    # 会话创建与 JSON 保存
-├── types.ts      # 消息、工具及事件类型
+├── main.ts         # REPL、配置与模块连接
+├── agent.ts        # 对话状态与工具调用循环
+├── client.ts       # 模型 HTTP 请求
+├── stream.ts       # SSE 解析与完整消息拼接
+├── renderer.ts     # 流式终端显示与 thinking 样式
+├── tools.ts        # 工具定义、注册与执行
+├── file-tools.ts   # write_file 与 edit_file
+├── command-tool.ts # run_command
+├── control.ts      # 取消、超时与可中断等待
+├── session.ts      # 会话创建与 JSON 保存
+├── types.ts        # 消息、工具及事件类型
 └── tsconfig.json
 ```
 
