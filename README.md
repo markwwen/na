@@ -67,6 +67,14 @@ export NA_API_KEY="your-api-key"
 npm run dev
 ```
 
+恢复历史会话：
+
+```bash
+npm run dev -- --resume <会话 ID 或前缀>
+```
+
+用 `/sessions` 查看可用 ID；退出程序时也会打印当前会话的恢复命令。
+
 示例输入：
 
 ```text
@@ -81,6 +89,10 @@ npm run dev
 
 | 命令 | 作用 |
 |---|---|
+| `/sessions` | 列出历史会话：轮次、更新时间、标题；跳过损坏或不兼容的文件 |
+| `/resume <id>` | 恢复指定会话，支持完整 ID 或至少 4 位前缀；前缀不唯一或模型不同时拒绝 |
+| `/context` | 显示历史消息数、完成轮次、摘要覆盖范围和当前请求估算字符数 |
+| `/compact` | 手动压缩较早的对话；可压缩的完整轮次不足时不做改动 |
 | `/clear` | 开始新会话，保留旧会话文件 |
 | `/quit` | 退出程序 |
 | `Ctrl+C` | 任务执行中取消当前任务；空闲时退出程序 |
@@ -89,15 +101,19 @@ npm run dev
 
 | 配置项 | 位置 | 当前行为 |
 |---|---|---|
-| `NA_BASE_URL` | 环境变量 | 模型服务根地址，建议显式设置 |
-| `NA_API_KEY` | 环境变量 | 必填的认证密钥 |
+| `NA_BASE_URL` | 环境变量 | 模型服务根地址，程序会追加 `/v1/messages`；未设置时回落到 `src/main.ts` 中的内置地址 |
+| `NA_API_KEY` | 环境变量 | 必填的认证密钥；未设置时启动直接报错 |
+| `NA_REQUEST_TIMEOUT_MS` | 环境变量 | 单次模型请求的总超时，默认 `300000` 毫秒 |
+| `NA_IDLE_TIMEOUT_MS` | 环境变量 | 连续未收到服务端数据的超时，默认 `60000` 毫秒 |
+| `NO_COLOR` | 环境变量 | 设置后 thinking 不再使用灰底；`TERM=dumb` 或输出非 TTY 时同样降级为纯文本 |
 | 模型名称 | `src/main.ts` | 当前为 `deepseek`，应与服务端模型名称或别名对应 |
 | `maxTokens` | `src/main.ts` | 当前为 `65536` |
 | System 提示词 | `src/main.ts` | 常量 `SYSTEM_PROMPT`，定义 Agent 身份（na / 呐）、语气人设与工作约束 |
-| Thinking 配置 | `src/client.ts` | 当前显式开启 |
+| Thinking 配置 | `src/client.ts` | 当前显式开启，`budget_tokens: 4096` |
 | 推理强度 | `src/client.ts` | 当前为 `output_config.effort: "max"` |
+| 上下文预算 | `src/context.ts` | `CONTEXT_LIMITS`：输入上限 120000 字符、保留最近 2 轮、单批摘要输入 24000 字符、摘要上限 6000 字符 |
 
-目前模型名称和推理参数需要修改代码，尚未提供 REPL 配置命令。
+两个超时都必须是 1～2147483647 之间的整数毫秒，否则请求前就会报错。模型名称、上下文预算和推理参数目前需要修改代码，尚未提供 REPL 配置命令。
 
 ## 工作流程
 
@@ -157,7 +173,9 @@ Agent 组织历史消息和工具定义
 
 当前只保存已完成的轮次。请求失败、流中断或保存失败时，本轮不会提交到内存历史；屏幕上可能已经显示部分内容。
 
-重新启动会创建新会话，目前不会自动加载旧记录。
+默认启动会创建新会话，不会自动加载旧记录；用 `--resume <会话 ID 或前缀>` 启动，或在 REPL 中用 `/sessions` 查看、`/resume <id>` 切换，即可继续历史会话。
+
+恢复要求会话记录中的模型与当前模型一致，单个会话文件上限为 64 MiB。
 
 ## 项目结构
 
@@ -174,6 +192,8 @@ src/
 ├── file-tools.ts   # write_file 与 edit_file
 ├── command-tool.ts # run_command
 ├── control.ts      # 取消、超时与可中断等待
+├── context.ts      # 上下文预算与摘要压缩
+├── history.ts      # 消息历史校验与摘要检查点
 ├── session.ts      # 会话创建与 JSON 保存
 ├── types.ts        # 消息、工具及事件类型
 └── tsconfig.json
