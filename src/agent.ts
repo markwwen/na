@@ -20,28 +20,43 @@ const MAX_MODEL_CALLS = 20;
 export class Agent {
   private messages: Message[];
   private checkpoint: ContextCheckpoint;
-  private readonly definitions: ToolDefinition[];
+  private definitions: ToolDefinition[];
 
 constructor(
   private model: ModelConfig,
-  private readonly systemPrompt: string,
+  private systemPrompt: string,
   private readonly onToolCall?: (call: ToolUseBlock) => void,
   private readonly saveMessages?: (state: SessionSnapshot) => Promise<void>,
   private readonly onStream?: (event: StreamEvent) => void,
   initial?: SessionSnapshot,
   private readonly onNotice?: (text: string) => void,
-  private readonly extraTools: AgentTool[] = [],
+  private extraTools: AgentTool[] = [],
 ) {
+  this.definitions = this.definitionsFor(extraTools);
+  this.messages = structuredClone(initial?.messages ?? this.createInitialMessages());
+  assertHistory(this.messages);
+  this.checkpoint = checkpointOf(initial?.context, this.messages);
+}
+
+  private definitionsFor(extraTools: AgentTool[]): ToolDefinition[] {
   const names = new Set(toolDefinitions.map(tool => tool.name));
   for (const tool of extraTools) {
     if (names.has(tool.name)) throw new Error(`工具重名：${tool.name}`);
     names.add(tool.name);
   }
-  this.definitions = [...toolDefinitions, ...extraTools.map(({ name, description, input_schema }) => ({ name, description, input_schema }))];
-  this.messages = structuredClone(initial?.messages ?? this.createInitialMessages());
-  assertHistory(this.messages);
-  this.checkpoint = checkpointOf(initial?.context, this.messages);
-}
+  return [...toolDefinitions, ...extraTools.map(({ name, description, input_schema }) => ({ name, description, input_schema }))];
+  }
+
+  async setEnvironment(systemPrompt: string, extraTools: AgentTool[], signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
+    const definitions = this.definitionsFor(extraTools);
+    const messages: Message[] = [{ role: "system", content: systemPrompt }, ...this.messages.slice(1)];
+    await this.saveMessages?.(structuredClone({ messages, context: this.checkpoint, model: selectionOf(this.model) }));
+    this.messages = messages;
+    this.systemPrompt = systemPrompt;
+    this.extraTools = extraTools;
+    this.definitions = definitions;
+  }
 
   async prompt(text: string, signal?: AbortSignal): Promise<string> {
     signal?.throwIfAborted();

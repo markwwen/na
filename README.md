@@ -41,7 +41,9 @@
 | 配置 | 模型与参数配置 | ✅ | 在配置文件或 REPL 中切换模型和推理强度 |
 | CLI | `na` 命令入口 | ✅ | 在任意项目目录启动 |
 | 扩展 | Skills | ✅ | 发现 `SKILL.md`，按需加载说明和参考文件，支持显式调用 |
-| 扩展 | 项目指令与自定义工具 | ⬜ | 自动加载项目指令文件、注册自定义工具 |
+| 扩展 | 项目指令 | ✅ | 从 Git 根目录到启动目录加载 `AGENTS.md` 等项目入口 |
+| 扩展 | `/init` 项目初始化 | ✅ | 从已有配置生成最小 harness 框架，保留已有文件 |
+| 扩展 | 自定义工具 | ⬜ | 通过用户配置或扩展包注册工具 |
 
 ## 安装
 
@@ -191,6 +193,9 @@ na --resume <会话 ID 或前缀>
 
 | 命令 | 作用 |
 |---|---|
+| `/init` | 在启动目录生成项目指令和验证 skill，保留已有文件，完成后自动重载 |
+| `/init --dry-run` | 显示计划写入的文件和内容，不写入框架文件 |
+| `/reload` | 重新加载项目指令与 skills，保留当前会话、模型及推理强度 |
 | `/skills` | 列出已发现的 skills、描述、文件路径及加载诊断 |
 | `/skill:<name> [任务说明]` | 加载指定 skill 并开始一轮任务，例如 `/skill:code-review 检查 src/agent.ts` |
 | `/model` | 列出可用模型及当前选择 |
@@ -274,7 +279,7 @@ description: 检查代码中的行为错误、边界条件和回归风险。用�
 默认提供审查结果；用户要求修复时再修改文件。
 ```
 
-重新启动 na 后输入：
+执行 `/reload` 或重新启动 na 后输入：
 
 ```text
 /skills
@@ -323,7 +328,51 @@ na --no-skills --skill /path/to/one-skill
 
 加载 skill 不会执行脚本；需要执行时，模型先读取脚本，再通过现有 `run_command` 使用其绝对路径，命令的工作目录仍为项目目录。其他 frontmatter 字段暂不解释，`allowed-tools` 不会创建权限限制，Claude Code 的参数占位符、动态命令替换及子代理执行语义暂不支持。
 
-每个 skill 或参考文件最多 64 KiB；一次最多发现 64 个 skills，扫描最多 4096 个路径、12 层目录。创建或恢复会话时重新发现目录；修改正文会在下次加载时生效，修改名称、描述或调用方式后需重新发现。加载内容按普通会话消息保存并参与压缩；仅手动调用的 skill 在恢复会话后若需要继续读取参考文件，需再次显式调用。
+每个 skill 或参考文件最多 64 KiB；一次最多发现 64 个 skills，扫描最多 4096 个路径、12 层目录。创建、恢复会话或 `/reload` 时重新发现目录；修改正文会在下次加载时生效，修改名称、描述或调用方式后需重新发现。加载内容按普通会话消息保存并参与压缩；仅手动调用的 skill 在恢复会话或重载后若需要继续读取参考文件，需再次显式调用。
+
+## `/init`：生成项目 harness 框架
+
+在目标项目目录启动 `na` 后，可以先预览，再创建：
+
+```text
+/init --dry-run
+/init
+```
+
+默认生成三个文件：
+
+```text
+AGENTS.md
+.agents/skills/verify-project/
+├── SKILL.md
+└── references/
+    └── commands.md
+```
+
+`AGENTS.md` 是简短的导航入口；`verify-project` 负责在验证改动时查找命令；`commands.md` 记录命令来源、顶层目录和待确认项。项目架构与业务规则需要根据实际代码补充，初始化不会虚构它们。
+
+当前从 `package.json` 的常用 scripts 和 `Makefile` 的简单目标提取 build、test、lint、typecheck、check、smoke 等入口，最多保留 64 项。包管理器优先采用 `packageManager`，否则从唯一的锁文件类型判断；无法判断时留下待确认项。其他技术栈也能生成框架，但需手动补充验证命令。
+
+初始化在本地完成，不请求模型，不安装项目依赖，也不执行提取出的命令。清单中存在命令不代表检查已经通过。默认复用已有命令，不生成重复的 `build.sh` / `test.sh`，也不自动配置 hooks、CI 或工具权限。
+
+已有文件始终保留，重复 `/init` 只补齐缺失项，不刷新或覆盖人工编辑的内容。若已有 `CLAUDE.md` 或 `AGENTS.override.md`，不再新建 `AGENTS.md`，以免改变现有项目指令来源。无法写入的项会单独报错；已创建的文件在失败或取消后保留，可再次执行补齐。
+
+完成后立即将新项目指令和 skills 加载到当前会话，原对话继续保留。若使用 `--no-skills` 启动，生成的 skill 仍遵守该开关，不会自动注册。查看和调用：
+
+```text
+/skills
+/skill:verify-project 验证本次修改
+```
+
+### 项目指令加载规则
+
+na 从最近的 Git 根目录逐层读取到启动目录；未找到 Git 根目录时，只检查启动目录。每层采用首个非空文件，顺序为 `AGENTS.override.md`、`AGENTS.md`、`CLAUDE.md`。指令按从上到下的顺序拼接，局部规则在所属目录范围内优先；项目指令不能覆盖用户明确要求和系统约束。
+
+加载总量最多 24 KiB，超出时明确报错，不静默截断。当前不递归加载整个仓库的局部规则，也不展开 `@import`；修改更深目录前，模型需按任务读取相关局部说明。项目指令是模型遵循的指导，不是权限系统。
+
+修改指令或 skills 后执行 `/reload`，无需新建会话。`/init` 始终作用于**启动目录**，不会自动切换到 Git 根目录；建议在希望初始化的项目根目录启动。
+
+关于为什么默认选择这一小框架，见 [harness 设计评审](docs/harness-design.md)。
 
 ## 工作流程
 
@@ -396,7 +445,7 @@ Agent 组织历史消息和工具定义
 assets/            # README 用图（na.png 形象、na-icon.svg 图标）
 scripts/           # 辅助脚本，make-na-icon.mjs 生成图标
 examples/skills/   # 可通过 --skill 加载的示例
-tests/             # Skills 发现、读取与 Agent 集成测试
+tests/             # Skills、项目初始化、指令加载与 Agent 集成测试
 tsconfig.json      # TypeScript 配置，编译 src 到 dist
 src/
 ├── main.ts         # REPL、配置与模块连接
@@ -404,6 +453,9 @@ src/
 ├── config.ts       # 配置加载、合并与默认值保存
 ├── model.ts        # 模型选择、请求参数与历史推理处理
 ├── skills.ts       # Skill 发现、元数据解析、按需读取与调用
+├── init.ts         # 项目事实提取、框架预览与保留式创建
+├── instructions.ts # 项目指令发现与上下文拼接
+├── project-files.ts # 有大小限制的项目文本读取
 ├── agent.ts        # 对话状态与工具调用循环
 ├── client.ts       # 模型 HTTP 请求
 ├── stream.ts       # SSE 解析与完整消息拼接

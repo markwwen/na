@@ -4,6 +4,8 @@ import { ConfigCatalog } from "./config.js";
 import { HELP, parseArgs, thinkingLevel, type CliOptions } from "./cli.js";
 import { selectionOf } from "./model.js";
 import { SkillCatalog } from "./skills.js";
+import { loadProjectInstructions, type ProjectInstructions } from "./instructions.js";
+import { applyInit, planInit } from "./init.js";
 import { createInterface } from "node:readline/promises";
 import { createStreamPrinter } from "./renderer.js";
 import { stdin as input, stdout as output } from "node:process";
@@ -20,6 +22,7 @@ let model: ModelConfig;
 let catalog: ConfigCatalog;
 let cli: CliOptions = {};
 let skills: SkillCatalog;
+let instructions: ProjectInstructions;
 
 
 const SYSTEM_PROMPT = [
@@ -31,7 +34,7 @@ const SYSTEM_PROMPT = [
   "理智优先：先查证再下结论，讲依据和取舍，不迎合、不夸大、不编造；失误直说并改正。",
   "人设只影响说话方式，不影响技术判断和执行标准；代码、注释、提交信息、文档保持中性。",
   "You are a concise and helpful coding assistant.",
-  "Use list_files and read_file to inspect the project before changing it.",
+  "Use list_files and read_file to inspect files relevant to the task when needed; reuse sufficient context already available.",
   "Use write_file to create or fully overwrite files; the parent directory must exist.",
   "Prefer edit_file for focused changes. old_text must match exactly once.",
   "Use run_command for non-interactive checks and tests. Inspect exit codes and output.",
@@ -51,8 +54,9 @@ function modelLabel(): string {
 }
 
 async function createAgent(prefix?: string, signal?: AbortSignal, startup = false): Promise<Agent> {
+  const nextInstructions = await loadProjectInstructions(process.cwd(), signal);
   const nextSkills = await SkillCatalog.load(catalog.skillOptions(), signal);
-  const systemPrompt = [SYSTEM_PROMPT, nextSkills.prompt()].filter(Boolean).join("\n\n");
+  const systemPrompt = [SYSTEM_PROMPT, nextInstructions.prompt, nextSkills.prompt()].filter(Boolean).join("\n\n");
   let session: SessionStore;
   let candidate: ModelConfig;
   if (prefix) {
@@ -93,12 +97,26 @@ async function createAgent(prefix?: string, signal?: AbortSignal, startup = fals
   if (prefix) await agent.setModel(candidate, signal);
   model = candidate;
   skills = nextSkills;
+  instructions = nextInstructions;
   activeSessionId = session.id;
   console.log(`会话文件：${session.filePath}`);
   console.log(`[model] ${modelLabel()}`);
+  for (const file of instructions.files) console.log(`[instructions] ${file}`);
   console.log(`[skills] 已发现 ${skills.list().length} 个；/skills 查看列表`);
   for (const warning of skills.diagnostics) console.warn(`[skills] ${warning}`);
   return agent;
+}
+
+async function reloadEnvironment(agent: Agent, signal?: AbortSignal): Promise<void> {
+  const nextCatalog = await ConfigCatalog.load(cli);
+  const nextInstructions = await loadProjectInstructions(process.cwd(), signal);
+  const nextSkills = await SkillCatalog.load(nextCatalog.skillOptions(), signal);
+  const systemPrompt = [SYSTEM_PROMPT, nextInstructions.prompt, nextSkills.prompt()].filter(Boolean).join("\n\n");
+  await agent.setEnvironment(systemPrompt, nextSkills.tools(), signal);
+  catalog = nextCatalog; instructions = nextInstructions; skills = nextSkills;
+  console.log(`[reload] 已加载 ${instructions.files.length} 份项目指令和 ${skills.list().length} 个 skills；保留当前会话和模型。`);
+  for (const file of instructions.files) console.log(`[instructions] ${file}`);
+  for (const warning of skills.diagnostics) console.warn(`[skills] ${warning}`);
 }
 
 async function main(): Promise<void> {
@@ -144,6 +162,7 @@ async function main(): Promise<void> {
   console.log(
     "/model 模型，/thinking 推理强度，/effort 同义命令，/config 配置；\n" +
     "/skills 列表，/skill:<name> [任务说明] 调用；\n" +
+    "/init [--dry-run] 项目框架，/reload 重载项目指令和 skills；\n" +
     "/sessions 列表，/resume <id> 恢复，/context 上下文，/compact 压缩；\n" +
     "/clear 新会话，/quit 退出；" +
     "运行时 Ctrl+C 取消，空闲时 Ctrl+C 退出。\n",
@@ -173,7 +192,23 @@ async function main(): Promise<void> {
       try {
         const [command, ...params] = text.split(/\s+/);
         const signal = currentTask.signal;
-        if (command === "/skills" && params.length === 0) {
+        if (command === "/init" && (params.length === 0 || (params.length === 1 && params[0] === "--dry-run"))) {
+          const dryRun = params[0] === "--dry-run";
+          const plan = await planInit(process.cwd(), signal);
+          const results = await applyInit(plan, dryRun, signal);
+          console.table(results.map(result => ({ 文件: result.path, 状态: dryRun && result.status === "created" ? "planned" : result.status, 说明: result.detail ?? "" })));
+          for (const message of plan.diagnostics) console.log(`[init] ${message}`);
+          if (dryRun) {
+            for (const file of plan.files) {
+              if (results.some(result => result.path === file.path && result.status === "created")) console.log(`\n--- ${file.path} ---\n${file.content}`);
+            }
+          } else {
+            console.log("[init] 已完成可写入项；已有文件保留。命令清单来自静态扫描，尚未运行项目检查。");
+            await reloadEnvironment(agent, signal);
+          }
+        } else if (command === "/reload" && params.length === 0) {
+          await reloadEnvironment(agent, signal);
+        } else if (command === "/skills" && params.length === 0) {
           console.table(skills.list().map(skill => ({ 名称: skill.name, 说明: skill.description,
             调用方式: skill.disableModelInvocation ? "仅手动" : "自动 / 手动", 文件: skill.file })));
           if (!skills.list().length) console.log("没有发现 skills。将 SKILL.md 放入 .na/skills/<name>/ 或 ~/.na/agent/skills/<name>/。");
@@ -243,7 +278,7 @@ async function main(): Promise<void> {
             ? "摘要已保存，完整历史仍保留。\n"
             : "较早的完整轮次不足，无需压缩。\n");
         } else if (text.startsWith("/")) {
-          throw new Error("未知命令或参数数量错误。支持 /skills、/skill:<name>、/model、/thinking、/effort、/config、/sessions、/resume <id>、/context、/compact、/clear、/quit");
+          throw new Error("未知命令或参数数量错误。支持 /init [--dry-run]、/reload、/skills、/skill:<name>、/model、/thinking、/effort、/config、/sessions、/resume <id>、/context、/compact、/clear、/quit");
         } else {
           await agent.prompt(text, signal);
         }
