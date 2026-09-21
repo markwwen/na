@@ -1,5 +1,6 @@
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { abortable } from "./control.js";
 
 import type {
   AgentTool,
@@ -63,7 +64,10 @@ const toolsByName = new Map(
   registeredTools.map((tool) => [tool.name, tool]),
 );
 
-async function resolveExistingPath(input: unknown): Promise<string> {
+async function resolveExistingPath(
+  input: unknown,
+  signal?: AbortSignal,
+): Promise<string> {
   if (
     typeof input !== "object" ||
     input === null ||
@@ -74,8 +78,18 @@ async function resolveExistingPath(input: unknown): Promise<string> {
     throw new Error("工具需要非空的字符串参数 path");
   }
 
-  const root = await realpath(process.cwd());
-  const target = await realpath(resolve(root, input.path));
+  const path = input.path;
+
+  const root = await abortable(
+    () => realpath(process.cwd()),
+    signal,
+  );
+
+  const target = await abortable(
+    () => realpath(resolve(root, path)),
+    signal,
+  );
+
   const rel = relative(root, target);
 
   if (
@@ -89,9 +103,16 @@ async function resolveExistingPath(input: unknown): Promise<string> {
   return target;
 }
 
-async function readTextFile(input: unknown): Promise<string> {
-  const filePath = await resolveExistingPath(input);
-  const info = await stat(filePath);
+async function readTextFile(
+  input: unknown,
+  signal?: AbortSignal,
+): Promise<string> {
+  const filePath = await resolveExistingPath(input, signal);
+
+  const info = await abortable(
+    () => stat(filePath),
+    signal,
+  );
 
   if (!info.isFile()) {
     throw new Error("path 必须指向普通文件");
@@ -101,7 +122,10 @@ async function readTextFile(input: unknown): Promise<string> {
     throw new Error("文件超过 128 KiB，本版暂不支持读取");
   }
 
-  const text = await readFile(filePath, "utf8");
+  const text = await abortable(
+    () => readFile(filePath, { encoding: "utf8", signal }),
+    signal,
+  );
 
   return text.length > 20_000
     ? text.slice(0, 20_000) +
@@ -109,17 +133,25 @@ async function readTextFile(input: unknown): Promise<string> {
     : text;
 }
 
-async function listFiles(input: unknown): Promise<string> {
-  const directory = await resolveExistingPath(input);
-  const info = await stat(directory);
+async function listFiles(
+  input: unknown,
+  signal?: AbortSignal,
+): Promise<string> {
+  const directory = await resolveExistingPath(input, signal);
+
+  const info = await abortable(
+    () => stat(directory),
+    signal,
+  );
 
   if (!info.isDirectory()) {
     throw new Error("path 必须指向目录");
   }
 
-  const entries = await readdir(directory, {
-    withFileTypes: true,
-  });
+  const entries = await abortable(
+    () => readdir(directory, { withFileTypes: true }),
+    signal,
+  );
 
   entries.sort((a, b) => a.name.localeCompare(b.name));
 
@@ -145,8 +177,11 @@ async function listFiles(input: unknown): Promise<string> {
 
 export async function executeTool(
   call: ToolUseBlock,
+  signal?: AbortSignal,
 ): Promise<ToolResultBlock> {
   try {
+    signal?.throwIfAborted();
+
     const tool = toolsByName.get(call.name);
 
     if (!tool) {
@@ -156,13 +191,21 @@ export async function executeTool(
     return {
       type: "tool_result",
       tool_use_id: call.id,
-      content: await tool.execute(call.input),
+      content: await abortable(
+        () => tool.execute(call.input, signal),
+        signal,
+      ),
     };
   } catch (error) {
+    // 取消必须终止 agent 循环，不能作为工具失败发回模型。
+    signal?.throwIfAborted();
+
     return {
       type: "tool_result",
       tool_use_id: call.id,
-      content: error instanceof Error ? error.message : String(error),
+      content: error instanceof Error
+        ? error.message
+        : String(error),
       is_error: true,
     };
   }

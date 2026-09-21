@@ -5,7 +5,10 @@ import { stdin as input, stdout as output } from "node:process";
 import { Agent } from "./agent.js";
 import { SessionStore } from "./session.js";
 import type { ModelConfig } from "./types.js";
-
+import {
+  TaskCancelledError,
+  RequestTimeoutError,
+} from "./control.js";
 
 const model: ModelConfig = {
   id: "deepseek",
@@ -16,6 +19,13 @@ const model: ModelConfig = {
   apiKey: process.env.NA_API_KEY ?? "",
 
   maxTokens: 65536,
+  requestTimeoutMs: Number(
+  process.env.NA_REQUEST_TIMEOUT_MS ?? 300_000,
+  ),
+
+  idleTimeoutMs: Number(
+    process.env.NA_IDLE_TIMEOUT_MS ?? 60_000,
+  ),
 };
 
 const SYSTEM_PROMPT = [
@@ -65,73 +75,112 @@ async function main(): Promise<void> {
     throw new Error("NA_API_KEY is not set");
   }
 
-    let agent = await createAgent();
+  let agent = await createAgent();
 
   const rl = createInterface({ input, output });
+  const lifetime = new AbortController();
 
-  // 处理用户关闭终端输入的情况。
   let closed = false;
+  let currentTask: AbortController | undefined;
+
+  const interrupt = () => {
+    if (currentTask) {
+      currentTask.abort(new TaskCancelledError());
+    } else {
+      rl.close();
+    }
+  };
+
+  // 终端键盘 Ctrl+C。
+  rl.on("SIGINT", interrupt);
+
+  // 外部进程发送的 SIGINT。
+  process.on("SIGINT", interrupt);
+
   rl.on("close", () => {
     closed = true;
+
+    // 结束可能正在等待的 question。
+    lifetime.abort();
+
+    // Ctrl+D 等关闭输入的情况，也取消当前任务。
+    currentTask?.abort(new TaskCancelledError());
   });
 
   console.log("na");
-  console.log("输入 /clear 清空对话，输入 /quit 退出。\n");
+  console.log(
+    "/clear 新会话，/quit 退出；" +
+    "运行时 Ctrl+C 取消，空闲时 Ctrl+C 退出。\n",
+  );
 
   try {
     while (!closed) {
       let text: string;
 
       try {
-        text = (await rl.question("> ")).trim();
+        text = (
+          await rl.question("> ", {
+            signal: lifetime.signal,
+          })
+        ).trim();
       } catch (error) {
-        if (closed) {
-          break;
-        }
-
+        if (closed) break;
         throw error;
       }
 
-      if (!text) {
+      if (closed || text === "/quit") break;
+      if (!text) continue;
+
+      if (text === "/clear") {
+        try {
+          agent = await createAgent();
+
+          console.log("已开始新会话，旧会话文件已保留。\n");
+        } catch (error) {
+          console.error(
+            error instanceof Error
+              ? error.message
+              : String(error),
+          );
+
+          console.error("创建失败，继续使用原会话。\n");
+        }
+
         continue;
       }
 
-      if (text === "/quit") {
-        break;
+      // 每轮都创建新的 controller，不能复用已取消的 signal。
+      currentTask = new AbortController();
+
+      try {
+        await agent.prompt(text, currentTask.signal);
+
+        if (currentTask.signal.aborted) {
+          console.log("\n本轮已进入保存阶段，已完成保存。");
+        }
+      } catch (error) {
+        streamPrinter.finish();
+
+        if (error instanceof TaskCancelledError) {
+          console.error("\n已取消当前任务。");
+        } else if (error instanceof RequestTimeoutError) {
+          console.error(`\n请求超时：${error.message}`);
+        } else {
+          const message = error instanceof Error
+            ? error.message
+            : String(error);
+
+          console.error(`\n请求失败：${message}`);
+        }
+
+        console.error("本轮消息未保存，可以重新输入。\n");
+      } finally {
+        currentTask = undefined;
+        streamPrinter.finish();
       }
-
-    if (text === "/clear") {
-    try {
-        agent = await createAgent();
-
-        console.log("已开始新会话，旧会话文件已保留。\n");
-    } catch (error) {
-        console.error(
-        error instanceof Error ? error.message : String(error),
-        );
-
-        console.error("创建失败，继续使用原会话。\n");
-    }
-
-    continue;
-    }
-
-    try {
-      // 回答已经通过流事件显示，不再重复打印返回值。
-      await agent.prompt(text);
-    } catch (error) {
-      streamPrinter.finish();
-
-      const message =
-        error instanceof Error ? error.message : String(error);
-
-      console.error(`\n请求失败：${message}`);
-      console.error("本轮消息未保存，可以重新输入。\n");
-    } finally {
-      streamPrinter.finish();
-    }
     }
   } finally {
+    process.off("SIGINT", interrupt);
     rl.close();
   }
 }

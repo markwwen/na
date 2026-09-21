@@ -24,7 +24,8 @@ constructor(
   this.messages = this.createInitialMessages();
 }
 
-  async prompt(text: string): Promise<string> {
+  async prompt(text: string, signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
     const content = text.trim();
 
     if (!content) {
@@ -42,7 +43,10 @@ constructor(
         working,
         toolDefinitions,
         this.onStream,
+        signal,
       );
+
+      signal?.throwIfAborted();
 
       if (stopReason === "max_tokens") {
         throw new Error("模型输出被截断，本轮未完成");
@@ -63,8 +67,11 @@ constructor(
         const results: ToolResultBlock[] = [];
 
         for (const call of calls) {
+          signal?.throwIfAborted();
+
           this.onToolCall?.(call);
-          results.push(await executeTool(call));
+
+          results.push(await executeTool(call, signal));
         }
 
         // 同一条回复里的所有工具结果，
@@ -98,14 +105,18 @@ constructor(
         throw new Error("模型未返回最终文本回答");
       }
 
-    working.push(message);
+      working.push(message);
 
-    // 保存成功后，才提交本轮内存状态。
-    await this.saveMessages?.(structuredClone(working));
+      // 进入保存前允许取消。
+      signal?.throwIfAborted();
 
-    this.messages = working;
+      // 保存与内存提交作为一个整体完成。
+      await this.saveMessages?.(structuredClone(working));
 
-    return answer;
+      this.messages = working;
+
+      return answer;
+
     }
 
     throw new Error(

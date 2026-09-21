@@ -8,6 +8,8 @@ export interface ModelConfig {
     type: "enabled";
     budget_tokens: number;
   };
+  requestTimeoutMs?: number;
+  idleTimeoutMs?: number;
 }
 
 export interface ThinkingBlock {
@@ -66,10 +68,15 @@ export interface LLMResponse {
 }
 
 export interface AgentTool extends ToolDefinition {
-  execute: (input: unknown) => Promise<string>;
+  execute: (
+    input: unknown,
+    signal?: AbortSignal,
+  ) => Promise<string>;
 }
 
 export type StreamEvent =
   | { type: "start"; kind: "text" | "thinking" }
   | { type: "delta"; kind: "text" | "thinking"; text: string }
   | { type: "end"; kind: "text" | "thinking" };
+
+
