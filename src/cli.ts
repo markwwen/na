@@ -71,5 +71,5 @@ export const HELP = `na - 终端 Coding Agent
 项目：.na/settings.json、.na/settings.local.json
 命令：/model、/thinking、/effort、/config、/config save [global|project]
 Skills：/skills 列表、/skill:<name> [任务说明] 调用
-项目：/init [--dry-run] 生成框架、/reload 重载项目指令和 skills
+项目：/init [--dry-run] 生成框架、/reload 重载项目指令、skills 和预算设置
 `;

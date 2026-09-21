@@ -1,14 +1,16 @@
 import { callLLM } from "./client.js";
+import { calibrateUsage, estimateInputTokens, inputTokenBudget, type UsageCalibration } from "./budget.js";
 import type { ContextCheckpoint } from "./history.js";
-import type { Message, ModelConfig, ToolDefinition } from "./types.js";
+import type { ContextLimits, Message, ModelConfig, TokenUsage, ToolDefinition } from "./types.js";
 
-export const CONTEXT_LIMITS = {
-  maxInputChars: 120_000,
+// 默认值；可用 settings.json 的 contextLimits 按字段覆盖。
+export const CONTEXT_LIMITS: ContextLimits = {
+  maxInputChars: 480_000,
   keepTurns: 2,
   maxSummaryChars: 6_000,
   batchChars: 24_000,
+  reserveTokens: 16_384,
 };
-export type ContextLimits = typeof CONTEXT_LIMITS;
 
 export class ContextManager {
   checkpoint: ContextCheckpoint;
@@ -20,12 +22,17 @@ export class ContextManager {
     checkpoint?: ContextCheckpoint,
     private readonly notice?: (text: string) => void,
     private readonly limits: ContextLimits = CONTEXT_LIMITS,
+    public calibration?: UsageCalibration,
   ) {
     this.checkpoint = structuredClone(checkpoint ?? { through: 1, summary: "" });
-    const { maxInputChars, keepTurns, maxSummaryChars, batchChars } = limits;
-    if (![maxInputChars, keepTurns, maxSummaryChars, batchChars].every(Number.isInteger) ||
-      keepTurns < 0 || batchChars < 1000 || maxSummaryChars < 100 ||
-      maxInputChars < batchChars + maxSummaryChars + 4000) throw new Error("上下文配置无效");
+    const { maxInputChars, keepTurns, maxSummaryChars, batchChars, reserveTokens } = limits;
+    if (![maxInputChars, keepTurns, maxSummaryChars, batchChars, reserveTokens].every(Number.isSafeInteger) ||
+      keepTurns < 0 || reserveTokens < 0 || batchChars < 1000 || maxSummaryChars < 100 ||
+      maxInputChars < batchChars + maxSummaryChars + 4000) {
+      throw new Error("上下文配置无效：各项都必须是整数，且 keepTurns ≥ 0、reserveTokens ≥ 0、batchChars ≥ 1000、" +
+        "maxSummaryChars ≥ 100、maxInputChars ≥ batchChars + maxSummaryChars + 4000");
+    }
+    inputTokenBudget(model, limits);
   }
 
   render(messages: Message[], checkpoint = this.checkpoint): Message[] {
@@ -41,6 +48,19 @@ export class ContextManager {
     return JSON.stringify({ messages, tools: this.tools }).length;
   }
 
+  estimate(messages: Message[]) {
+    return estimateInputTokens(this.model, messages, this.tools, this.calibration);
+  }
+
+  observe(messages: Message[], usage?: TokenUsage): void {
+    this.calibration = calibrateUsage(this.model, messages, this.tools, usage) ?? this.calibration;
+  }
+
+  private fits(messages: Message[]): boolean {
+    return this.size(messages) <= this.limits.maxInputChars &&
+      this.estimate(messages).tokens <= inputTokenBudget(this.model, this.limits);
+  }
+
   async prepare(
     messages: Message[],
     signal?: AbortSignal,
@@ -48,7 +68,7 @@ export class ContextManager {
   ): Promise<Message[]> {
     signal?.throwIfAborted();
     const current = this.render(messages);
-    if (!options.force && this.size(current) <= this.limits.maxInputChars) return current;
+    if (!options.force && this.fits(current)) return current;
 
     const starts = messages.flatMap((m, i) =>
       i >= this.checkpoint.through && m.role === "user" && typeof m.content === "string" ? [i] : []);
@@ -58,23 +78,27 @@ export class ContextManager {
     let cut = starts[keepFrom] ?? messages.length;
 
     // 摘要预留空间；放不下时逐轮减少保留历史，但绝不切当前任务。
-    const projected = () => this.size(this.render(messages, {
+    const projected = () => this.render(messages, {
       through: cut, summary: "摘".repeat(this.limits.maxSummaryChars),
-    }));
-    while (projected() > this.limits.maxInputChars && keepFrom < lastCut) {
+    });
+    while (!this.fits(projected()) && keepFrom < lastCut) {
       cut = starts[++keepFrom] ?? messages.length;
     }
-    if (projected() > this.limits.maxInputChars) {
-      throw new Error("当前任务及工具输出已超过上下文字符预算；请缩小任务、限制命令输出，或调整 CONTEXT_LIMITS.maxInputChars");
+    if (!this.fits(projected())) {
+      throw new Error("当前任务及工具输出已超过上下文预算；请缩小任务、限制命令输出，或检查模型窗口和 contextLimits");
     }
-    if (cut <= this.checkpoint.through) return current;
+    if (cut <= this.checkpoint.through) {
+      // 调小限制后旧摘要可能大于新的预留大小，不能把 projected 当作实际请求。
+      if (!this.fits(current)) throw new Error("当前任务或已有摘要超过上下文预算，且没有可压缩的完整轮次；请缩小任务或调整预算");
+      return current;
+    }
 
     this.notice?.(`正在压缩早期对话，保留 ${starts.length - keepFrom - pending} 个最近完成的轮次……`);
     const summary = await this.summarize(messages.slice(this.checkpoint.through, cut), signal);
     signal?.throwIfAborted();
     const next = { through: cut, summary };
     const result = this.render(messages, next);
-    if (this.size(result) > this.limits.maxInputChars) throw new Error("压缩后仍超过上下文预算");
+    if (!this.fits(result)) throw new Error("压缩后仍超过上下文预算");
     // 所有摘要请求成功后才更新。Agent 仍需在整轮成功时持久化。
     this.checkpoint = next;
     return result;

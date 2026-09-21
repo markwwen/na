@@ -15,12 +15,29 @@ export interface ModelConfig extends ModelSelection {
   authHeader: boolean;
   headers: Record<string, string>;
   maxTokens: number;
+  contextWindow?: number;
   thinkingMode: "budget" | "adaptive";
   thinkingBudget?: number;
   effort?: string;
   temperature?: number;
   requestTimeoutMs?: number;
   idleTimeoutMs?: number;
+}
+
+// 字符上限作为额外保护；token 预算由模型窗口减去预留空间得到。
+export interface ContextLimits {
+  maxInputChars: number;
+  keepTurns: number;
+  maxSummaryChars: number;
+  batchChars: number;
+  reserveTokens: number;
+}
+
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
 }
 
 export interface ThinkingBlock {
@@ -76,6 +93,7 @@ export interface ToolDefinition {
 export interface LLMResponse {
   message: AssistantMessage;
   stopReason: string | null;
+  usage?: TokenUsage;
 }
 
 export interface AgentTool extends ToolDefinition {

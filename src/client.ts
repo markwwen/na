@@ -1,5 +1,6 @@
 import { RequestTimeoutError } from "./control.js";
 import { readMessageStream } from "./stream.js";
+import { estimateInputTokens, fitOutputBudget } from "./budget.js";
 import {
   messagesUrl,
   reasoningParameters,
@@ -22,8 +23,10 @@ export async function callLLM(
   tools: ToolDefinition[] = [],
   onEvent?: (event: StreamEvent) => void,
   signal?: AbortSignal,
+  inputTokens?: number,
 ): Promise<LLMResponse> {
   signal?.throwIfAborted();
+  config = fitOutputBudget(config, inputTokens ?? estimateInputTokens(config, messages, tools).tokens);
 
   const totalMs = config.requestTimeoutMs ?? 300_000;
   const idleMs = config.idleTimeoutMs ?? 60_000;

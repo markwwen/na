@@ -3,9 +3,12 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parse, type ParseError } from "jsonc-parser";
+import { MAX_MODEL_CALLS } from "./agent.js";
 import { thinkingLevel, type CliOptions } from "./cli.js";
+import { CONTEXT_LIMITS } from "./context.js";
+import { DEFAULT_CONTEXT_WINDOW, inputTokenBudget } from "./budget.js";
 import { messagesUrl, reasoningParameters, requestHeaders } from "./model.js";
-import { THINKING_LEVELS, type ModelConfig, type ModelSelection, type ThinkingLevel } from "./types.js";
+import { THINKING_LEVELS, type ContextLimits, type ModelConfig, type ModelSelection, type ThinkingLevel } from "./types.js";
 import { skillPath, type SkillOptions } from "./skills.js";
 
 type Dict = Record<string, unknown>;
@@ -54,6 +57,27 @@ function normalize(raw: Dict): Dict {
   if (raw.defaultThinkingLevel === undefined && raw.effortLevel !== undefined) result.defaultThinkingLevel = raw.effortLevel;
   return result;
 }
+// 只覆盖写出的字段；跨字段约束与 ContextManager 的校验保持一致，便于启动时给出明确错误。
+function contextLimitsOf(raw: unknown): ContextLimits {
+  const limits: ContextLimits = { ...CONTEXT_LIMITS };
+  if (raw === undefined) return limits;
+  const minimums: Record<keyof ContextLimits, number> = {
+    maxInputChars: 1, keepTurns: 0, maxSummaryChars: 100, batchChars: 1000, reserveTokens: 0,
+  };
+  for (const [key, value] of Object.entries(object(raw, "contextLimits"))) {
+    if (!Object.hasOwn(minimums, key)) throw new Error(`contextLimits.${key} 不是可配置项；支持 ${Object.keys(minimums).join("、")}`);
+    limits[key as keyof ContextLimits] = integer(value, `contextLimits.${key}`, minimums[key as keyof ContextLimits]);
+  }
+  const required = limits.batchChars + limits.maxSummaryChars + 4000;
+  if (limits.maxInputChars < required) {
+    throw new Error(`contextLimits.maxInputChars 至少为 batchChars + maxSummaryChars + 4000，即 ${required}`);
+  }
+  return limits;
+}
+// 未配置或设为 0 时不限主循环请求次数。
+function maxModelCallsOf(raw: unknown): number {
+  return raw === undefined ? MAX_MODEL_CALLS : integer(raw, "maxModelCalls", 0);
+}
 
 // 与当前 pi 的 $VAR / ${VAR} / $$ / $! 写法一致。普通大写字符串仍是字面值。
 export function resolveValue(value: unknown, env: NodeJS.ProcessEnv, label: string): string {
@@ -77,6 +101,8 @@ export class ConfigCatalog {
     private readonly configDir: string,
     private readonly cwd: string,
     private readonly userDirectory: string,
+    private readonly limits: ContextLimits,
+    private readonly modelCallLimit: number,
   ) {}
 
   static async load(cli: CliOptions, options: { cwd?: string; userDirectory?: string; env?: NodeJS.ProcessEnv } = {}): Promise<ConfigCatalog> {
@@ -168,13 +194,22 @@ export class ConfigCatalog {
         settings = { ...settings, defaultProvider: settings.defaultProvider ?? provider, defaultModel: settings.defaultModel ?? id };
       }
     }
-    return new ConfigCatalog(cli, files, settings, entries, env, configDir, cwd, userDirectory);
+    return new ConfigCatalog(cli, files, settings, entries, env, configDir, cwd, userDirectory,
+      contextLimitsOf(settings.contextLimits), maxModelCallsOf(settings.maxModelCalls));
   }
 
   skillOptions(): SkillOptions {
     return { cwd: this.cwd, userDirectory: this.userDirectory, configDir: this.configDir,
       paths: [...(this.settings.skills as string[] | undefined ?? [])],
       explicitPaths: [...(this.cli.skillPaths ?? [])], noSkills: this.cli.noSkills };
+  }
+
+  contextLimits(): ContextLimits {
+    return { ...this.limits };
+  }
+
+  maxModelCalls(): number {
+    return this.modelCallLimit;
   }
 
   list() {
@@ -256,6 +291,7 @@ export class ConfigCatalog {
       provider: selected.provider, id: selected.id, api: "anthropic-messages", baseUrl,
       apiKey: resolveValue(key ?? "", this.env, "apiKey"), authHeader, headers,
       maxTokens, thinkingLevel: level, thinkingMode: adaptive ? "adaptive" : "budget",
+      contextWindow: integer(c.contextWindow ?? DEFAULT_CONTEXT_WINDOW, "model.contextWindow"),
       ...(level === "off" ? {} : {
         thinkingBudget: integer(budgets[level] ?? defaults[level], `thinkingBudgets.${level}`, 1024),
         effort: typeof map[level] === "string" ? map[level] as string : adaptive ? (level === "minimal" ? "low" : level) : undefined,
@@ -268,6 +304,7 @@ export class ConfigCatalog {
       model.temperature = s.temperature;
     }
     reasoningParameters(model); requestHeaders(model);
+    inputTokenBudget(model, this.limits);
     return model;
   }
 
@@ -276,6 +313,8 @@ export class ConfigCatalog {
       thinkingMode: model.thinkingMode, requestThinking: reasoningParameters(model), maxTokens: model.maxTokens, temperature: model.temperature,
       baseUrl: model.baseUrl, apiKeyConfigured: !!model.apiKey, customHeaderNames: Object.keys(model.headers),
       requestTimeoutMs: model.requestTimeoutMs, idleTimeoutMs: model.idleTimeoutMs,
+      contextWindow: model.contextWindow,
+      contextLimits: this.contextLimits(), maxModelCalls: this.maxModelCalls(),
       source: this.cli.source ?? "na", searchedConfigFiles: this.files };
   }
 

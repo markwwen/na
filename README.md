@@ -9,8 +9,6 @@
 当前可以在终端中与模型对话，让模型自主查看目录、读取和修改代码、执行类型检查和测试，同时显示 thinking 和工具调用过程。
 
 
-
-
 ## 安装
 
 需要 Node.js 22+、npm。当前命令执行工具支持 macOS / Linux。
@@ -45,7 +43,7 @@ na
 | 文件 | 用途 |
 |---|---|
 | `~/.na/agent/models.json` | 注册提供商、服务地址、认证方式及模型能力 |
-| `~/.na/agent/settings.json` | 选择默认模型、推理强度、输出预算和超时 |
+| `~/.na/agent/settings.json` | 选择默认模型、推理强度、输出预算、上下文预算和超时 |
 
 先创建目录，再将下面的 JSON 分别保存到对应文件；已有配置时合并需要的字段：
 
@@ -110,6 +108,7 @@ mkdir -p ~/.na/agent
 | `models[].id` | 请求发送的模型名称，必须与服务端一致 |
 | `models[].reasoning` | 是否允许开启 thinking；不支持推理时设为 `false`，并选择 `off` |
 | `models[].maxTokens` | 本地声明的最大输出 token 上限，应按服务能力填写 |
+| `models[].contextWindow` | 模型输入与输出共用的 token 窗口，应按服务能力填写；未配置时按 500000 预算，不代表自动识别出的容量 |
 | `models[].thinkingLevelMap` | 将 na 推理档位映射到请求的 `output_config.effort`；`null` 表示该档位不可用 |
 
 示例声明了 `off`、`high`、`max` 三个可选档位；其中 `high`、`max` 需要服务端支持对应的 effort 值。按实际部署调整映射。若服务只接受 `thinking.budget_tokens`，可删除 `thinkingLevelMap`，并在设置中选择 `high` 等普通档位；`xhigh` 和 `max` 必须显式声明映射才能使用。
@@ -153,7 +152,13 @@ na 在读取模型配置和初始化终端显示前，使用 [Node 内置的 `.e
     "max": 4096
   },
   "requestTimeoutMs": 300000,
-  "idleTimeoutMs": 60000
+  "idleTimeoutMs": 60000,
+  "maxModelCalls": 0,
+  "contextLimits": {
+    "maxInputChars": 480000,
+    "keepTurns": 2,
+    "reserveTokens": 16384
+  }
 }
 ```
 
@@ -164,6 +169,28 @@ na 在读取模型配置和初始化终端显示前，使用 [Node 内置的 `.e
 `thinkingBudgets` 控制各档位的推理 token 预算上限，不保证模型一定输出这么长的 thinking。`maxTokens` 是包含 thinking 的总输出预算，不能超过模型声明的上限；请求层会为回答预留至少 1024 个 token。启用预算模式的 thinking 时，`maxTokens` 至少为 2048。
 
 `requestTimeoutMs` 是每次模型请求的总超时；`idleTimeoutMs` 是连续未收到网络数据的超时，SSE 心跳也会刷新它。两者单位均为毫秒，取值范围为 1～2147483647。
+
+`maxModelCalls` 控制一次用户任务中主循环的模型请求次数，不是用户对话轮数，也不包含摘要请求。默认 `0` 表示不限次数；设为正整数（如 `100`）可保留硬上限。不限次数时仍可用 Ctrl+C 取消，单次请求超时和上下文预算仍然有效；重复工具调用不会仅因达到固定次数而停止。达到显式上限或取消时，本轮消息不保存，已执行的工具副作用不会回滚。
+
+`contextLimits` 按字段覆盖默认值：
+
+| 字段 | 默认值 | 含义 |
+|---|---|---|
+| `reserveTokens` | 16384 | 从模型窗口中预留的输出空间，输入估算超过剩余窗口时触发压缩 |
+| `maxInputChars` | 480000 | 额外的输入序列化字符上限，与 token 预算同时检查 |
+| `keepTurns` | 2 | 压缩时优先保留的最近完整轮次，空间不足时会减少 |
+| `batchChars` | 24000 | 单批摘要记录的字符上限 |
+| `maxSummaryChars` | 6000 | 新摘要的字符上限 |
+
+各项须为非负整数，且 `batchChars ≥ 1000`、`maxSummaryChars ≥ 100`、`maxInputChars ≥ batchChars + maxSummaryChars + 4000`。模型窗口必须容纳预留空间和必要输出，否则启动、切换模型或 `/reload` 会报错。
+
+输入 token 估算优先使用最近有效响应的 usage（包含缓存读写及输出），再加上新增消息的估算；流式 usage 按累计值覆盖，遵循 [Anthropic 流式协议](https://platform.claude.com/docs/en/build-with-claude/streaming)。没有有效 usage 时，ASCII 内容约按四字符/token，非 ASCII 按每个 UTF-16 单元一 token 估算，同时计算系统提示词和工具定义。这不是精确 tokenizer，仍可能与服务端计量有差异。
+
+usage 校准只保存在当前进程内存中；恢复会话、切换模型、重载环境，或压缩/过滤 thinking 导致请求前缀变化后，先退回内容估算，再由新响应校准。旧会话格式保持兼容。实际请求的 `max_tokens` 还会按剩余窗口收缩，并额外留出 1024 tokens 安全余量；预算模式的 thinking 会同步收缩，保留必要的回答空间。即使将 `reserveTokens` 设为 0，也会保留安全余量和最小输出空间。
+
+压缩仍只处理完整的早期轮次，当前任务的工具调用链不拆分；当前任务过大、旧摘要在调小预算后无法容纳，或摘要请求自身超出模型窗口时会明确报错，不发送超出本地估算预算的请求。小窗口模型需相应调低预留量、摘要长度和批次大小。
+
+`/context` 显示当前实际使用的窗口、预留量和估算依据；`/config` 显示当前生效的预算和调用上限。修改 `contextLimits`、`maxModelCalls` 后执行 `/reload` 即可在当前会话生效；`/model` 列表不会替当前 Agent 应用这些设置。修改 `models.json` 的 `contextWindow` 后需重新选择模型或重启；`/reload` 保留当前模型配置。
 
 ### 3. 启动与切换
 
@@ -196,7 +223,7 @@ na --resume <会话 ID 或前缀>
 |---|---|
 | `/init` | 在启动目录生成项目指令和验证 skill，保留已有文件，完成后自动重载 |
 | `/init --dry-run` | 显示计划写入的文件和内容，不写入框架文件 |
-| `/reload` | 重新加载项目指令与 skills，保留当前会话、模型及推理强度 |
+| `/reload` | 重新加载项目指令、skills、`contextLimits` 与 `maxModelCalls`，保留当前会话、模型及推理强度 |
 | `/skills` | 列出已发现的 skills、描述、文件路径及加载诊断 |
 | `/skill:<name> [任务说明]` | 加载指定 skill 并开始一轮任务，例如 `/skill:code-review 检查 src/agent.ts` |
 | `/model` | 列出可用模型及当前选择 |
@@ -207,7 +234,7 @@ na --resume <会话 ID 或前缀>
 | `/config save project` | 将当前选择保存到项目的 `.na/settings.local.json` |
 | `/sessions` | 列出历史会话：轮次、更新时间、标题；跳过损坏或不兼容的文件 |
 | `/resume <id>` | 恢复指定会话及其模型选择，支持完整 ID 或至少 4 位唯一前缀 |
-| `/context` | 显示历史消息数、完成轮次、摘要覆盖范围和当前请求估算字符数 |
+| `/context` | 显示历史与摘要、模型 token 窗口、输入预算、预留量、估算依据及每轮请求上限 |
 | `/compact` | 手动压缩较早的对话；可压缩的完整轮次不足时不做改动 |
 | `/clear` | 开始新会话，保留旧会话文件 |
 | `/quit` | 退出程序 |
@@ -223,7 +250,7 @@ na --resume <会话 ID 或前缀>
 4. 启动目录中的 `.na/settings.local.json`。
 5. `--settings <path>` 指定的额外文件。
 
-项目配置按启动目录查找，不向父目录查找。`models.json` 从全局配置目录读取，不读取项目中的同名文件。配置支持 JSONC 注释和尾逗号；`/config save` 会保留其他配置字段，但重新写为不带注释的 JSON。
+项目配置按启动目录查找，不向父目录查找。`models.json` 从全局配置目录读取，不读取项目中的同名文件。配置支持 JSONC 注释和尾逗号；对象字段（如 `contextLimits`、`thinkingBudgets`）按子字段合并，只写需要调整的项即可；`/config save` 会保留其他配置字段，但重新写为不带注释的 JSON。
 
 新会话的模型与推理强度选择优先级为：REPL 显式切换 > CLI 参数 > 对应环境变量 > 配置文件。环境变量内部的优先级为：启动前已有变量 > 项目 `.env` > `settings.env`。配置中的 `modelThinkingLevels["provider/id"]` 优先于 `defaultThinkingLevel`；`/config save` 会同时保存这两个字段。恢复会话时优先使用会话保存的模型与推理强度，也可在启动时用 `--model`、`--thinking` 显式覆盖。
 
@@ -250,7 +277,7 @@ na 的导入器读取 Pi 的 `~/.pi/agent/settings.json`、`models.json` 和项�
 
 目前兼容常用模型字段及 `model`、`effortLevel` 别名，模型请求仅支持 `anthropic-messages`；不导入内置模型目录、OAuth 登录、hooks 或权限配置，也不执行 `!command` 凭据命令。`settings.env` 仅参与请求配置解析，不注入工具命令环境，且同名进程环境变量优先。
 
-System 提示词仍在 `src/main.ts` 的 `SYSTEM_PROMPT` 中。上下文预算仍在 `src/context.ts` 的 `CONTEXT_LIMITS` 中：输入上限 120000 字符、保留最近 2 轮、单批摘要输入 24000 字符、摘要上限 6000 字符。
+System 提示词仍在 `src/main.ts` 的 `SYSTEM_PROMPT` 中。上下文预算的默认值在 `src/context.ts` 的 `CONTEXT_LIMITS`：输入上限 480000 字符、保留最近 2 轮、单批摘要输入 24000 字符、摘要上限 6000 字符、预留 16384 tokens；运行时由 settings 的 `contextLimits` 逐字段覆盖，实际生效值可用 `/config` 查看。
 
 ## Skills
 
@@ -526,7 +553,7 @@ npm run icon
 | 工具 | `run_command` | ✅ | 执行类型检查、测试等非交互命令 |
 | Agent | 工具调用循环 | ✅ | 请求模型、执行工具、回传结果，直到完成 |
 | Agent | 工具错误回传 | ✅ | 将执行错误作为工具结果交给模型 |
-| Agent | 模型请求次数限制 | ✅ | 每轮最多发起 20 次模型请求 |
+| Agent | 模型请求次数限制 | ✅ | 默认不限次数，可用 `maxModelCalls` 设置硬上限 |
 | Agent | 流异常处理 | ✅ | 检测错误事件和连接提前结束 |
 | 会话 | JSON 会话保存 | ✅ | 每轮完成后保存完整消息历史 |
 | 会话 | 新建会话 | ✅ | 启动或 `/clear` 时创建新会话，保留旧文件 |

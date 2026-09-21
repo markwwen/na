@@ -2,6 +2,7 @@ import type {
   AssistantMessage,
   LLMResponse,
   StreamEvent,
+  TokenUsage,
 } from "./types.js";
 
 type Block = AssistantMessage["content"][number];
@@ -121,6 +122,27 @@ export async function readMessageStream(
 
   let started = false;
   let stopReason: string | null = null;
+  const usage: Partial<TokenUsage> = {};
+  let invalidUsage = false;
+  let hasOutputUsage = false;
+  const readUsage = (raw: unknown, delta = false) => {
+    if (raw === undefined) return;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) { invalidUsage = true; return; }
+    const values = raw as Record<string, unknown>;
+    const fields = { input_tokens: "inputTokens", output_tokens: "outputTokens",
+      cache_read_input_tokens: "cacheReadTokens", cache_creation_input_tokens: "cacheCreationTokens" } as const;
+    for (const [wire, key] of Object.entries(fields)) {
+      const value = values[wire];
+      // usage 是附加计量；兼容网关缺失或无效字段时退回估算。
+      if (value !== undefined) {
+        if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+          usage[key] = value;
+          if (delta && key === "outputTokens") hasOutputUsage = true;
+        }
+        else { delete usage[key]; invalidUsage = true; }
+      }
+    }
+  };
 
   let current:
     | {
@@ -161,6 +183,7 @@ export async function readMessageStream(
       }
 
       started = true;
+      readUsage(message.usage);
       continue;
     }
 
@@ -281,6 +304,8 @@ export async function readMessageStream(
       }
 
       const reason = object(event.delta).stop_reason;
+      // message_delta 的 usage 是累计值，覆盖而非累加。
+      readUsage(event.usage, true);
 
       if (reason !== null && reason !== undefined) {
         stopReason = string(reason);
@@ -300,6 +325,10 @@ export async function readMessageStream(
           content,
         },
         stopReason,
+        ...(!invalidUsage && hasOutputUsage && usage.inputTokens !== undefined && usage.outputTokens !== undefined ? {
+          usage: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens,
+            cacheReadTokens: usage.cacheReadTokens ?? 0, cacheCreationTokens: usage.cacheCreationTokens ?? 0 },
+        } : {}),
       };
     }
 
