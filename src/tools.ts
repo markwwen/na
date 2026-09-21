@@ -182,11 +182,12 @@ async function listFiles(
 export async function executeTool(
   call: ToolUseBlock,
   signal?: AbortSignal,
+  extraTools: AgentTool[] = [],
 ): Promise<ToolResultBlock> {
   try {
     signal?.throwIfAborted();
 
-    const tool = toolsByName.get(call.name);
+    const tool = toolsByName.get(call.name) ?? extraTools.find(tool => tool.name === call.name);
 
     if (!tool) {
       throw new Error(`未知工具：${call.name}`);

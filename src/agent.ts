@@ -6,6 +6,8 @@ import { callLLM } from "./client.js";
 import { executeTool, toolDefinitions } from "./tools.js";
 
 import type {
+  AgentTool,
+  ToolDefinition,
   StreamEvent,
   Message,
   ModelConfig,
@@ -18,6 +20,7 @@ const MAX_MODEL_CALLS = 20;
 export class Agent {
   private messages: Message[];
   private checkpoint: ContextCheckpoint;
+  private readonly definitions: ToolDefinition[];
 
 constructor(
   private model: ModelConfig,
@@ -27,7 +30,14 @@ constructor(
   private readonly onStream?: (event: StreamEvent) => void,
   initial?: SessionSnapshot,
   private readonly onNotice?: (text: string) => void,
+  private readonly extraTools: AgentTool[] = [],
 ) {
+  const names = new Set(toolDefinitions.map(tool => tool.name));
+  for (const tool of extraTools) {
+    if (names.has(tool.name)) throw new Error(`工具重名：${tool.name}`);
+    names.add(tool.name);
+  }
+  this.definitions = [...toolDefinitions, ...extraTools.map(({ name, description, input_schema }) => ({ name, description, input_schema }))];
   this.messages = structuredClone(initial?.messages ?? this.createInitialMessages());
   assertHistory(this.messages);
   this.checkpoint = checkpointOf(initial?.context, this.messages);
@@ -53,7 +63,7 @@ constructor(
       const { message, stopReason } = await callLLM(
         this.model,
         input,
-        toolDefinitions,
+        this.definitions,
         this.onStream,
         signal,
       );
@@ -83,7 +93,7 @@ constructor(
 
           this.onToolCall?.(call);
 
-          results.push(await executeTool(call, signal));
+          results.push(await executeTool(call, signal, this.extraTools));
         }
 
         // 同一条回复里的所有工具结果，
@@ -173,7 +183,7 @@ constructor(
   }
 
   private createContext(): ContextManager {
-    return new ContextManager(this.model, this.systemPrompt, toolDefinitions, this.checkpoint, this.onNotice);
+    return new ContextManager(this.model, this.systemPrompt, this.definitions, this.checkpoint, this.onNotice);
   }
 
   private createInitialMessages(): Message[] {

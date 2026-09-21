@@ -11,6 +11,8 @@ export interface CliOptions {
   maxTokens?: number;
   source?: "na" | "pi" | "claude";
   settingsFile?: string;
+  skillPaths?: string[];
+  noSkills?: boolean;
 }
 export function thinkingLevel(value: unknown): ThinkingLevel {
   if (!THINKING_LEVELS.includes(value as ThinkingLevel)) throw new Error(`推理强度应为 ${THINKING_LEVELS.join(" / ")}`);
@@ -23,6 +25,13 @@ export function parseArgs(args: string[]): CliOptions {
     const arg = args[i]!;
     if (arg === "--help" || arg === "-h") { result.help = true; continue; }
     if (arg === "--version" || arg === "-v") { result.version = true; continue; }
+    if (arg === "--no-skills") { result.noSkills = true; continue; }
+    if (arg === "--skill") {
+      const path = args[++i];
+      if (!path || path.startsWith("--")) throw new Error("--skill 缺少路径");
+      (result.skillPaths ??= []).push(path);
+      continue;
+    }
     const key = arg === "--effort" ? "--thinking" : arg;
     if (!["--resume", "--provider", "--model", "--thinking", "--max-tokens", "--config-source", "--settings"].includes(key)) throw new Error(`未知参数：${arg}`);
     if (seen.has(key)) throw new Error(`参数重复：${arg}`);
@@ -54,9 +63,12 @@ export const HELP = `na - 终端 Coding Agent
   --resume <id 或前缀>          恢复当前项目中的会话
   --config-source <na|pi|claude> 读取其他工具的常用模型配置（只读）
   --settings <path>             额外的 settings.json 文件
+  --skill <path>                添加 skill 目录或 SKILL.md（可重复）
+  --no-skills                   禁用默认目录和 settings.skills，仍加载 --skill
   --help / --version
 
 配置：~/.na/agent/settings.json、models.json
 项目：.na/settings.json、.na/settings.local.json
 命令：/model、/thinking、/effort、/config、/config save [global|project]
+Skills：/skills 列表、/skill:<name> [任务说明] 调用
 `;

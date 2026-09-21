@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { ConfigCatalog } from "./config.js";
 import { HELP, parseArgs, thinkingLevel, type CliOptions } from "./cli.js";
 import { selectionOf } from "./model.js";
+import { SkillCatalog } from "./skills.js";
 import { createInterface } from "node:readline/promises";
 import { createStreamPrinter } from "./renderer.js";
 import { stdin as input, stdout as output } from "node:process";
@@ -18,6 +19,7 @@ import {
 let model: ModelConfig;
 let catalog: ConfigCatalog;
 let cli: CliOptions = {};
+let skills: SkillCatalog;
 
 
 const SYSTEM_PROMPT = [
@@ -49,6 +51,8 @@ function modelLabel(): string {
 }
 
 async function createAgent(prefix?: string, signal?: AbortSignal, startup = false): Promise<Agent> {
+  const nextSkills = await SkillCatalog.load(catalog.skillOptions(), signal);
+  const systemPrompt = [SYSTEM_PROMPT, nextSkills.prompt()].filter(Boolean).join("\n\n");
   let session: SessionStore;
   let candidate: ModelConfig;
   if (prefix) {
@@ -66,12 +70,12 @@ async function createAgent(prefix?: string, signal?: AbortSignal, startup = fals
     }
   } else {
     candidate = model ?? catalog.resolve();
-    session = await SessionStore.create(candidate.id, SYSTEM_PROMPT, selectionOf(candidate));
+    session = await SessionStore.create(candidate.id, systemPrompt, selectionOf(candidate));
   }
   signal?.throwIfAborted();
   const agent = new Agent(
     candidate,
-    SYSTEM_PROMPT,
+    systemPrompt,
     (call) => {
       streamPrinter.finish();
       console.log(`[tool] ${call.name} ${JSON.stringify(call.input)}`);
@@ -83,13 +87,17 @@ async function createAgent(prefix?: string, signal?: AbortSignal, startup = fals
       streamPrinter.finish();
       console.log(`[context] ${text}`);
     },
+    nextSkills.tools(),
   );
   // 也持久化启动时覆盖的选择和旧会话的 provider 补全。
   if (prefix) await agent.setModel(candidate, signal);
   model = candidate;
+  skills = nextSkills;
   activeSessionId = session.id;
   console.log(`会话文件：${session.filePath}`);
   console.log(`[model] ${modelLabel()}`);
+  console.log(`[skills] 已发现 ${skills.list().length} 个；/skills 查看列表`);
+  for (const warning of skills.diagnostics) console.warn(`[skills] ${warning}`);
   return agent;
 }
 
@@ -135,6 +143,7 @@ async function main(): Promise<void> {
 
   console.log(
     "/model 模型，/thinking 推理强度，/effort 同义命令，/config 配置；\n" +
+    "/skills 列表，/skill:<name> [任务说明] 调用；\n" +
     "/sessions 列表，/resume <id> 恢复，/context 上下文，/compact 压缩；\n" +
     "/clear 新会话，/quit 退出；" +
     "运行时 Ctrl+C 取消，空闲时 Ctrl+C 退出。\n",
@@ -164,7 +173,17 @@ async function main(): Promise<void> {
       try {
         const [command, ...params] = text.split(/\s+/);
         const signal = currentTask.signal;
-        if ((command === "/config" || command === "/settings") && params.length === 0) {
+        if (command === "/skills" && params.length === 0) {
+          console.table(skills.list().map(skill => ({ 名称: skill.name, 说明: skill.description,
+            调用方式: skill.disableModelInvocation ? "仅手动" : "自动 / 手动", 文件: skill.file })));
+          if (!skills.list().length) console.log("没有发现 skills。将 SKILL.md 放入 .na/skills/<name>/ 或 ~/.na/agent/skills/<name>/。");
+          for (const warning of skills.diagnostics) console.warn(`[skills] ${warning}`);
+        } else if (command?.startsWith("/skill:")) {
+          const name = command.slice("/skill:".length);
+          const expanded = await skills.invoke(name, text.slice(command.length).trim(), signal);
+          console.log(`[skill] ${name}`);
+          await agent.prompt(expanded, signal);
+        } else if ((command === "/config" || command === "/settings") && params.length === 0) {
           console.log(JSON.stringify(catalog.describe(model), null, 2));
         } else if (command === "/config" && params[0] === "save" && params.length <= 2) {
           const scope = params[1] ?? "global";
@@ -224,7 +243,7 @@ async function main(): Promise<void> {
             ? "摘要已保存，完整历史仍保留。\n"
             : "较早的完整轮次不足，无需压缩。\n");
         } else if (text.startsWith("/")) {
-          throw new Error("未知命令或参数数量错误。支持 /model、/thinking、/effort、/config、/sessions、/resume <id>、/context、/compact、/clear、/quit");
+          throw new Error("未知命令或参数数量错误。支持 /skills、/skill:<name>、/model、/thinking、/effort、/config、/sessions、/resume <id>、/context、/compact、/clear、/quit");
         } else {
           await agent.prompt(text, signal);
         }
@@ -272,6 +291,8 @@ async function main(): Promise<void> {
       if (cli.source && cli.source !== "na") command.push("--config-source", cli.source);
       if (cli.settingsFile) command.push("--settings", cli.settingsFile);
       if (cli.maxTokens !== undefined) command.push("--max-tokens", String(cli.maxTokens));
+      if (cli.noSkills) command.push("--no-skills");
+      for (const path of cli.skillPaths ?? []) command.push("--skill", path);
       command.push("--resume", activeSessionId);
       const quote = (value: string) => /^[A-Za-z0-9_./:@+-]+$/.test(value) ? value : "'" + value.replace(/'/g, "'\\''") + "'";
       console.log("  " + command.map(quote).join(" ") + "\n");

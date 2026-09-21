@@ -40,7 +40,8 @@
 | 上下文 | 上下文管理 | ✅ | 控制历史长度、压缩较早的消息 |
 | 配置 | 模型与参数配置 | ✅ | 在配置文件或 REPL 中切换模型和推理强度 |
 | CLI | `na` 命令入口 | ✅ | 在任意项目目录启动 |
-| 扩展 | 项目指令与自定义工具 | ⬜ | 加载项目说明并扩展工具能力 |
+| 扩展 | Skills | ✅ | 发现 `SKILL.md`，按需加载说明和参考文件，支持显式调用 |
+| 扩展 | 项目指令与自定义工具 | ⬜ | 自动加载项目指令文件、注册自定义工具 |
 
 ## 安装
 
@@ -190,6 +191,8 @@ na --resume <会话 ID 或前缀>
 
 | 命令 | 作用 |
 |---|---|
+| `/skills` | 列出已发现的 skills、描述、文件路径及加载诊断 |
+| `/skill:<name> [任务说明]` | 加载指定 skill 并开始一轮任务，例如 `/skill:code-review 检查 src/agent.ts` |
 | `/model` | 列出可用模型及当前选择 |
 | `/model <provider/id> [thinking]` | 切换当前会话的模型，可同时指定推理强度 |
 | `/thinking [level]`、`/effort [level]` | 查看或切换推理强度，具体可用档位由模型配置决定 |
@@ -243,6 +246,85 @@ na 的导入器读取 Pi 的 `~/.pi/agent/settings.json`、`models.json` 和项�
 
 System 提示词仍在 `src/main.ts` 的 `SYSTEM_PROMPT` 中。上下文预算仍在 `src/context.ts` 的 `CONTEXT_LIMITS` 中：输入上限 120000 字符、保留最近 2 轮、单批摘要输入 24000 字符、摘要上限 6000 字符。
 
+## Skills
+
+Skills 是可复用的任务说明，使用 [Agent Skills 的 `SKILL.md` 格式](https://agentskills.io/specification)：文件顶部是 YAML 元数据，后面是 Markdown 正文。启动时只将名称、描述和位置加入系统提示词；任务匹配时，模型通过 `load_skill` 读取完整说明。也可以用 `/skill:<name>` 明确调用，正文会随本轮用户消息传给模型。
+
+### 创建与使用
+
+项目 skill 放在 `.na/skills/<name>/SKILL.md`，所有项目共享的 skill 放在 `~/.na/agent/skills/<name>/SKILL.md`。例如：
+
+```text
+.na/skills/code-review/
+├── SKILL.md
+└── references/
+    └── checklist.md
+```
+
+`SKILL.md` 最小示例：
+
+```markdown
+---
+name: code-review
+description: 检查代码中的行为错误、边界条件和回归风险。用于用户要求代码审查的任务。
+---
+
+先读取用户指定的文件及相关调用点，再检查错误处理和边界条件。
+只报告有代码依据的问题，注明文件路径、触发条件和影响。
+默认提供审查结果；用户要求修复时再修改文件。
+```
+
+重新启动 na 后输入：
+
+```text
+/skills
+/skill:code-review 检查 src/agent.ts 的工具调用循环
+```
+
+仓库包含可直接尝试的示例，带一个按需读取的检查清单：
+
+```bash
+na --skill ./examples/skills/code-review
+```
+
+`name` 必须为 1～64 个小写字母、数字或单连字符，不能以连字符开头或结尾。`description` 必须是 1～1024 字符的非空字符串，支持 YAML 多行文本。名称可以与目录名不同。添加 `disable-model-invocation: true` 可将 skill 从模型目录中隐藏，仅允许用户通过 `/skill:<name>` 调用。
+
+### 发现路径和迁移
+
+发现顺序如下；同名 skill 保留先发现的版本，并显示冲突提示：
+
+1. `--skill <path>` 指定的目录或 `SKILL.md`，参数可重复。
+2. 配置文件的 `skills` 数组。
+3. 当前项目的 `.na/skills/`、`.agents/skills/`。
+4. 全局配置目录下的 `skills/`（默认 `~/.na/agent/skills/`）、`~/.agents/skills/`。
+
+可以在 `~/.na/agent/settings.json` 中加入现有的 skill 目录：
+
+```json
+{
+  "skills": ["~/.pi/agent/skills", "~/.claude/skills"]
+}
+```
+
+将此字段合并到已有配置即可。项目 `.na/settings.json` 可使用 `"skills": ["../.claude/skills"]`。配置文件中的相对路径以**该配置文件所在目录**为基准；CLI 路径以启动目录为基准；支持 `~/`。后面的配置层会整体替换前面的 `skills` 数组。
+
+递归扫描 `SKILL.md`，发现一个 skill 后不再将其子目录当作独立 skills 扫描。隐藏子目录和 `node_modules` 会跳过；支持符号链接目录并去重，避免循环。无效文件会跳过并显示诊断。当前不扫描父项目目录、独立的普通 `.md` 文件或插件包声明。
+
+```bash
+na --no-skills
+na --no-skills --skill /path/to/one-skill
+```
+
+`--no-skills` 禁用默认目录和配置中的 skills，仍允许显式 `--skill`。它只控制本次发现，不删除历史消息中已保存的 skill 内容。退出时的恢复命令会保留这些 CLI 参数。
+
+### 按需加载与边界
+
+模型使用 `read_skill_file` 读取 skill 的参考文件、模板和脚本，路径相对于 `SKILL.md` 所在目录；即使全局 skill 位于项目外，也可以读取。该工具仅返回 skill 目录内的文本，拒绝越界路径和指向目录外的符号链接，不改变普通项目文件工具的访问范围。
+
+加载 skill 不会执行脚本；需要执行时，模型先读取脚本，再通过现有 `run_command` 使用其绝对路径，命令的工作目录仍为项目目录。其他 frontmatter 字段暂不解释，`allowed-tools` 不会创建权限限制，Claude Code 的参数占位符、动态命令替换及子代理执行语义暂不支持。
+
+每个 skill 或参考文件最多 64 KiB；一次最多发现 64 个 skills，扫描最多 4096 个路径、12 层目录。创建或恢复会话时重新发现目录；修改正文会在下次加载时生效，修改名称、描述或调用方式后需重新发现。加载内容按普通会话消息保存并参与压缩；仅手动调用的 skill 在恢复会话后若需要继续读取参考文件，需再次显式调用。
+
 ## 工作流程
 
 ```text
@@ -277,8 +359,10 @@ Agent 组织历史消息和工具定义
 | `write_file` | `{"path":"agent-demo.txt","content":"hello na"}` | 创建或完整覆盖 UTF-8 文件；父目录须已存在；最多 128 KiB；不支持符号链接目标 |
 | `edit_file` | `{"path":"src/main.ts","old_text":"...","new_text":"..."}` | 精确替换唯一匹配的 `old_text`；匹配零处或多处均失败；`new_text` 为空表示删除 |
 | `run_command` | `{"command":"npm run typecheck"}` | 通过 `/bin/sh` 执行非交互命令；默认超时 60 秒，最多 300 秒；stdout/stderr 各保留前 32 KiB；非零退出码或超时视为工具错误；仅支持 macOS / Linux |
+| `load_skill` | `{"name":"code-review"}` | 按名称读取已发现的 skill 完整说明；仅发现 skills 时注册 |
+| `read_skill_file` | `{"name":"code-review","path":"references/checklist.md"}` | 读取 skill 目录内的 UTF-8 文本，最多 64 KiB；仅发现 skills 时注册 |
 
-路径以程序启动时的工作目录为基准。工具会解析真实路径，并检查目标是否位于工作目录内；`run_command` 的 `cwd` 同样受此限制。
+项目文件工具的路径以启动时的工作目录为基准，会检查目标是否位于工作目录内；`run_command` 的 `cwd` 同样受此限制。`read_skill_file` 则以对应 skill 目录为基准。
 
 ## 会话保存
 
@@ -311,12 +395,15 @@ Agent 组织历史消息和工具定义
 ```text
 assets/            # README 用图（na.png 形象、na-icon.svg 图标）
 scripts/           # 辅助脚本，make-na-icon.mjs 生成图标
+examples/skills/   # 可通过 --skill 加载的示例
+tests/             # Skills 发现、读取与 Agent 集成测试
 tsconfig.json      # TypeScript 配置，编译 src 到 dist
 src/
 ├── main.ts         # REPL、配置与模块连接
 ├── cli.ts          # CLI 参数解析与帮助
 ├── config.ts       # 配置加载、合并与默认值保存
 ├── model.ts        # 模型选择、请求参数与历史推理处理
+├── skills.ts       # Skill 发现、元数据解析、按需读取与调用
 ├── agent.ts        # 对话状态与工具调用循环
 ├── client.ts       # 模型 HTTP 请求
 ├── stream.ts       # SSE 解析与完整消息拼接
@@ -337,6 +424,7 @@ src/
 
 ```bash
 npm run typecheck
+npm test
 ```
 
 启动开发版本：

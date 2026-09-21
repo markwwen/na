@@ -6,6 +6,7 @@ import { parse, type ParseError } from "jsonc-parser";
 import { thinkingLevel, type CliOptions } from "./cli.js";
 import { messagesUrl, reasoningParameters, requestHeaders } from "./model.js";
 import { THINKING_LEVELS, type ModelConfig, type ModelSelection, type ThinkingLevel } from "./types.js";
+import { skillPath, type SkillOptions } from "./skills.js";
 
 type Dict = Record<string, unknown>;
 export interface ResolveOptions { provider?: string; model?: string; thinking?: ThinkingLevel; maxTokens?: number; }
@@ -75,6 +76,7 @@ export class ConfigCatalog {
     private readonly env: NodeJS.ProcessEnv,
     private readonly configDir: string,
     private readonly cwd: string,
+    private readonly userDirectory: string,
   ) {}
 
   static async load(cli: CliOptions, options: { cwd?: string; userDirectory?: string; env?: NodeJS.ProcessEnv } = {}): Promise<ConfigCatalog> {
@@ -85,7 +87,17 @@ export class ConfigCatalog {
     const files: string[] = [];
     let settings: Dict = {};
     let models: Dict = {};
-    const addSettings = async (path: string, optional = true) => { settings = merge(settings, normalize(await readJson(path, optional))); files.push(path); };
+    const addSettings = async (path: string, optional = true) => {
+      const layer = normalize(await readJson(path, optional));
+      if (layer.skills !== undefined) {
+        if (!Array.isArray(layer.skills) || layer.skills.some(p => typeof p !== "string" || !p.trim())) {
+          throw new Error(`配置 ${path} 的 skills 必须是非空路径字符串数组`);
+        }
+        // Resolve each layer before merging so paths keep their declaring file's base.
+        layer.skills = layer.skills.map(p => skillPath(p as string, dirname(path), userDirectory));
+      }
+      settings = merge(settings, layer); files.push(path);
+    };
     if (cli.source === "pi") {
       const pi = processEnv.PI_CODING_AGENT_DIR ? resolve(cwd, processEnv.PI_CODING_AGENT_DIR) : join(userDirectory, ".pi", "agent");
       await addSettings(join(pi, "settings.json"));
@@ -156,7 +168,13 @@ export class ConfigCatalog {
         settings = { ...settings, defaultProvider: settings.defaultProvider ?? provider, defaultModel: settings.defaultModel ?? id };
       }
     }
-    return new ConfigCatalog(cli, files, settings, entries, env, configDir, cwd);
+    return new ConfigCatalog(cli, files, settings, entries, env, configDir, cwd, userDirectory);
+  }
+
+  skillOptions(): SkillOptions {
+    return { cwd: this.cwd, userDirectory: this.userDirectory, configDir: this.configDir,
+      paths: [...(this.settings.skills as string[] | undefined ?? [])],
+      explicitPaths: [...(this.cli.skillPaths ?? [])], noSkills: this.cli.noSkills };
   }
 
   list() {
