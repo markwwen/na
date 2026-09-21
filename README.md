@@ -1,4 +1,11 @@
-# na
+<h1 align="center">
+  <img src="./assets/na-icon.svg" width="88" alt="na icon" /><br />
+  na（呐）
+</h1>
+
+<p align="center">
+  <img src="./assets/na.png" width="360" alt="na 娘" />
+</p>
 
 > 呐（na）—— 会读你的项目、动手改文件的终端 Coding Agent。
 
@@ -162,6 +169,8 @@ Agent 组织历史消息和工具定义
 ## 项目结构
 
 ```text
+assets/            # README 用图（na.png 形象、na-icon.svg 图标）
+scripts/           # 辅助脚本，make-na-icon.mjs 生成图标
 src/
 ├── main.ts         # REPL、配置与模块连接
 ├── agent.ts        # 对话状态与工具调用循环
@@ -189,4 +198,10 @@ npx tsc --noEmit -p src/tsconfig.json
 
 ```bash
 npm run dev
+```
+
+重新生成 README 图标：
+
+```bash
+npm run icon
 ```

@@ -3,7 +3,8 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "dev": "tsx src/main.ts"
+    "dev": "tsx src/main.ts",
+    "icon": "node scripts/make-na-icon.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.13.5",

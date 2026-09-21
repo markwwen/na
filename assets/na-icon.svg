@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="na-icon-title">
+  <title id="na-icon-title">na 图标：钠原子的电子排布（K 2、L 8、M 1）</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#18233b" />
+      <stop offset="100%" stop-color="#0b1220" />
+    </linearGradient>
+    <radialGradient id="nucleus" cx="38%" cy="32%" r="78%">
+      <stop offset="0%" stop-color="#fb923c" />
+      <stop offset="100%" stop-color="#dc2626" />
+    </radialGradient>
+  </defs>
+  <!-- 由 scripts/make-na-icon.mjs 生成，请修改脚本后重新运行。 -->
+  <rect x="8" y="8" width="496" height="496" rx="112" fill="url(#bg)" stroke="#334155" stroke-opacity="0.6" stroke-width="2" />
+  <circle class="shell" cx="256" cy="256" r="104" fill="none" stroke="#475569" stroke-width="3" />
+  <circle class="shell" cx="256" cy="256" r="158" fill="none" stroke="#475569" stroke-width="3" />
+  <circle class="shell" cx="256" cy="256" r="212" fill="none" stroke="#475569" stroke-width="3" />
+  
+    <circle class="electron" cx="256" cy="152" r="10.5" fill="#7dd3fc" />
+    <circle class="electron" cx="256" cy="360" r="10.5" fill="#7dd3fc" />
+  
+    <circle class="electron" cx="316.46" cy="110.03" r="10.5" fill="#7dd3fc" />
+    <circle class="electron" cx="401.97" cy="195.54" r="10.5" fill="#7dd3fc" />
+    <circle class="electron" cx="401.97" cy="316.46" r="10.5" fill="#7dd3fc" />
+    <circle class="electron" cx="316.46" cy="401.97" r="10.5" fill="#7dd3fc" />
+    <circle class="electron" cx="195.54" cy="401.97" r="10.5" fill="#7dd3fc" />
+    <circle class="electron" cx="110.03" cy="316.46" r="10.5" fill="#7dd3fc" />
+    <circle class="electron" cx="110.03" cy="195.54" r="10.5" fill="#7dd3fc" />
+    <circle class="electron" cx="195.54" cy="110.03" r="10.5" fill="#7dd3fc" />
+  
+    <circle class="electron" cx="256" cy="44" r="10.5" fill="#7dd3fc" />
+  <circle cx="256" cy="256" r="56" fill="url(#nucleus)" />
+</svg>
