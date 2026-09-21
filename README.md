@@ -1,13 +1,8 @@
-<h1 align="center">
-  <img src="./assets/na-icon.svg" width="88" alt="na icon" /><br />
-  na（呐）
-</h1>
-
 <p align="center">
   <img src="./assets/na.png" width="360" alt="na 娘" />
 </p>
 
-> 呐（na）—— 会读你的项目、动手改文件的终端 Coding Agent。
+> 呐（na）！有什么能为您服务的吗？
 
 一个使用 TypeScript 从零实现的轻量级终端 Coding Agent，参考 Pi 的能力逐步迭代，用于学习模型调用、工具执行、流式交互和会话管理。
 
