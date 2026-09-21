@@ -6,6 +6,7 @@ import { selectionOf } from "./model.js";
 import { SkillCatalog } from "./skills.js";
 import { loadProjectInstructions, type ProjectInstructions } from "./instructions.js";
 import { applyInit, planInit } from "./init.js";
+import { loadProjectEnv } from "./env.js";
 import { createInterface } from "node:readline/promises";
 import { createStreamPrinter } from "./renderer.js";
 import { stdin as input, stdout as output } from "node:process";
@@ -45,7 +46,7 @@ const SYSTEM_PROMPT = [
 ].join("\n");
 
 
-const streamPrinter = createStreamPrinter();
+let streamPrinter: ReturnType<typeof createStreamPrinter>;
 
 let activeSessionId = "";
 
@@ -126,6 +127,8 @@ async function main(): Promise<void> {
     const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
     console.log(pkg.version); return;
   }
+  loadProjectEnv();
+  streamPrinter = createStreamPrinter();
   catalog = await ConfigCatalog.load(cli);
   let agent = await createAgent(cli.resume, undefined, true);
 

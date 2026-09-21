@@ -139,7 +139,21 @@ mkdir -p ~/.na/agent
 export NA_API_KEY="your-api-key"
 ```
 
-引用的环境变量为空或未设置时，选择该模型会报错。服务无需认证时，将 `apiKey` 改为 `""`。程序不会自动加载 `.env` 文件。
+也可以在**启动 na 的项目目录**创建 `.env`，无需每次手动 export：
+
+```dotenv
+NA_API_KEY=your-api-key
+```
+
+仓库提供 [.env.example](.env.example)，可复制为 `.env` 后填写实际值。na 在读取模型配置和初始化终端显示前，使用 [Node 内置的 `.env` 加载功能](https://nodejs.org/docs/latest-v22.x/api/process.html#processloadenvfilepath) 读取该文件；`na` 与 `npm run dev` 都适用。
+
+- 终端已有的同名环境变量优先，包括显式设置的空字符串；`.env` 仅补充未设置的变量。
+- 只读取启动目录的 `.env`，不向父目录查找，也不自动加载 `.env.local`；文件不存在时正常启动。
+- 支持注释、带引号的值及 `export KEY=value` 写法。含 `#` 的密钥应加引号；不执行 shell 命令，也不对值里的 `$VAR` 做变量展开。
+- 加载后的变量参与模型配置解析，并由 `run_command` 子进程继承。`--help` 和 `--version` 不读取 `.env`。
+- `.env` 只在启动时加载，修改后需重启；`/reload` 不重新读取它。文件须为可读的普通文件，最大 128 KiB。
+
+引用的环境变量为空或未设置时，选择该模型会报错。服务无需认证时，将 `apiKey` 改为 `""`。`.env` 已在 `.gitignore` 中，不提交实际密钥。
 
 ### 2. 配置 `settings.json`
 
@@ -224,7 +238,7 @@ na --resume <会话 ID 或前缀>
 
 项目配置按启动目录查找，不向父目录查找。`models.json` 从全局配置目录读取，不读取项目中的同名文件。配置支持 JSONC 注释和尾逗号；`/config save` 会保留其他配置字段，但重新写为不带注释的 JSON。
 
-新会话的模型与推理强度选择优先级为：REPL 显式切换 > CLI 参数 > 对应环境变量 > 配置文件。配置中的 `modelThinkingLevels["provider/id"]` 优先于 `defaultThinkingLevel`；`/config save` 会同时保存这两个字段。恢复会话时优先使用会话保存的模型与推理强度，也可在启动时用 `--model`、`--thinking` 显式覆盖。
+新会话的模型与推理强度选择优先级为：REPL 显式切换 > CLI 参数 > 对应环境变量 > 配置文件。环境变量内部的优先级为：启动前已有变量 > 项目 `.env` > `settings.env`。配置中的 `modelThinkingLevels["provider/id"]` 优先于 `defaultThinkingLevel`；`/config save` 会同时保存这两个字段。恢复会话时优先使用会话保存的模型与推理强度，也可在启动时用 `--model`、`--thinking` 显式覆盖。
 
 | 环境变量 | 用途 | 说明 |
 |---|---|---|
@@ -451,6 +465,7 @@ src/
 ├── main.ts         # REPL、配置与模块连接
 ├── cli.ts          # CLI 参数解析与帮助
 ├── config.ts       # 配置加载、合并与默认值保存
+├── env.ts          # 启动目录 .env 加载，保留已有环境变量
 ├── model.ts        # 模型选择、请求参数与历史推理处理
 ├── skills.ts       # Skill 发现、元数据解析、按需读取与调用
 ├── init.ts         # 项目事实提取、框架预览与保留式创建
