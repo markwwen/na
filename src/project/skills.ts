@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { parseDocument } from "yaml";
-import type { AgentTool } from "./types.js";
+import type { AgentTool } from "../types.js";
 
 const MAX_FILE_BYTES = 64 * 1024;
 const MAX_SKILLS = 64;

@@ -1,5 +1,5 @@
 import { stdout as output } from "node:process";
-import type { StreamEvent } from "./types.js";
+import type { StreamEvent } from "../types.js";
 
 export function createStreamPrinter() {
   const colored =

@@ -6,14 +6,17 @@ na（呐）是从零实现的轻量级终端 Coding Agent，用于逐步学习�
 
 | 修改方向 | 入口与职责 |
 |---|---|
-| CLI、REPL、交互 | [cli.ts](src/cli.ts) 解析启动参数；[main.ts](src/main.ts) 处理命令、组装 Agent、取消与退出；[renderer.ts](src/renderer.ts) 显示流式内容 |
-| Agent 循环 | [agent.ts](src/agent.ts) 组织请求、执行工具、提交会话；[types.ts](src/types.ts) 定义消息和工具接口 |
-| 模型与协议 | [env.ts](src/env.ts) 启动时加载项目环境变量；[config.ts](src/config.ts) 加载配置；[model.ts](src/model.ts) 生成请求参数和历史回放；[client.ts](src/client.ts) 请求与超时；[stream.ts](src/stream.ts) 校验 SSE 消息 |
-| 工具与取消 | [tools.ts](src/tools.ts) 注册和分发工具；[file-tools.ts](src/file-tools.ts) 写入与精确替换；[command-tool.ts](src/command-tool.ts) 子进程管理；[control.ts](src/control.ts) 取消和超时类型 |
-| 历史与上下文 | [history.ts](src/history.ts) 校验完整轮次；[session.ts](src/session.ts) 保存与恢复；[context.ts](src/context.ts) 生成摘要和请求上下文；[budget.ts](src/budget.ts) 估算 token、校准 usage 和预留输出空间 |
-| 项目指导与 skills | [instructions.ts](src/instructions.ts) 加载项目指令；[skills.ts](src/skills.ts) 发现与按需读取；[init.ts](src/init.ts) 生成框架；[project-files.ts](src/project-files.ts) 有大小限制的文本读取 |
+| CLI、REPL、交互 | [main.ts](src/main.ts) 启动与组装；[args.ts](src/cli/args.ts) 解析参数；[repl.ts](src/cli/repl.ts) 命令分发、取消与退出；[renderer.ts](src/cli/renderer.ts) 显示流式内容 |
+| 应用状态 | [app.ts](src/app.ts) 管理当前配置、模型和会话，组装提示词与工具，协调恢复、模型切换和重载 |
+| Agent 循环 | [agent.ts](src/agent/agent.ts) 通过 `AgentOptions` 接收模型、完整工具列表和回调，组织请求、执行工具、提交会话；[types.ts](src/types.ts) 定义消息和工具接口 |
+| 模型与配置 | [env.ts](src/config/env.ts) 加载项目环境变量；[config.ts](src/config/config.ts) 加载配置；[model.ts](src/llm/model.ts) 生成请求参数和历史回放；[client.ts](src/llm/client.ts) 请求与超时；[stream.ts](src/llm/stream.ts) 校验 SSE 消息 |
+| 工具与取消 | [registry.ts](src/tools/registry.ts) 统一工具定义、去重和分发；[builtin.ts](src/tools/builtin.ts) 组合内置工具；[read.ts](src/tools/read.ts) 读取与列目录；[write.ts](src/tools/write.ts) 写入与精确替换；[command.ts](src/tools/command.ts) 子进程管理；[control.ts](src/agent/control.ts) 取消和超时类型 |
+| 历史与上下文 | [history.ts](src/agent/history.ts) 校验完整轮次；[store.ts](src/session/store.ts) 保存与恢复；[context.ts](src/agent/context.ts) 生成摘要和请求上下文；[budget.ts](src/agent/budget.ts) 估算 token 和校准 usage；[runtime-limits.ts](src/agent/runtime-limits.ts) 运行限制默认值和校验 |
+| 项目指导与 skills | [instructions.ts](src/project/instructions.ts) 加载项目指令；[skills.ts](src/project/skills.ts) 发现与按需读取；[init.ts](src/project/init.ts) 生成框架；[files.ts](src/project/files.ts) 有大小限制的文本读取 |
 
-安装、配置和用户命令见 [README](README.md)。调整 harness 的范围和默认行为时，参考 [设计说明](docs/harness-design.md)；只读取本次任务相关的资料。
+安装、配置和用户命令见 [README](README.md)，模块协作与源码阅读路线见 [架构导读](docs/architecture.md)。调整 harness 的范围和默认行为时，参考 [设计说明](docs/harness-design.md)；只读取本次任务相关的资料。
+
+保持单个 npm 包。CLI 负责终端交互，App 顺序协调应用操作；Agent 不导入 CLI 或具体内置工具，工具列表由 App 显式传入。配置与运行时共享限制定义，配置层不依赖 Agent 类。
 
 ## 开发与验证
 

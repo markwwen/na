@@ -3,10 +3,9 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ConfigCatalog } from "../src/config.js";
-import { CONTEXT_LIMITS } from "../src/context.js";
-import { MAX_MODEL_CALLS } from "../src/agent.js";
-import type { CliOptions } from "../src/cli.js";
+import { ConfigCatalog } from "../src/config/config.js";
+import { CONTEXT_LIMITS, MAX_MODEL_CALLS } from "../src/agent/runtime-limits.js";
+import type { CliOptions } from "../src/cli/args.js";
 
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   const root = await mkdtemp(join(tmpdir(), "na-config-"));

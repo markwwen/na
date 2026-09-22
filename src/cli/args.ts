@@ -1,5 +1,5 @@
-import { THINKING_LEVELS } from "./types.js";
-import type { ThinkingLevel } from "./types.js";
+import { thinkingLevel } from "../types.js";
+import type { ThinkingLevel } from "../types.js";
 
 export interface CliOptions {
   help?: boolean;
@@ -13,10 +13,6 @@ export interface CliOptions {
   settingsFile?: string;
   skillPaths?: string[];
   noSkills?: boolean;
-}
-export function thinkingLevel(value: unknown): ThinkingLevel {
-  if (!THINKING_LEVELS.includes(value as ThinkingLevel)) throw new Error(`推理强度应为 ${THINKING_LEVELS.join(" / ")}`);
-  return value as ThinkingLevel;
 }
 export function parseArgs(args: string[]): CliOptions {
   const result: CliOptions = {};

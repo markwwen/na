@@ -1,17 +1,9 @@
-import { fileTools } from "./file-tools.js";
-import { commandTool } from "./command-tool.js";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { abortable } from "./control.js";
+import { abortable } from "../agent/control.js";
+import type { AgentTool } from "../types.js";
 
-import type {
-  AgentTool,
-  ToolDefinition,
-  ToolResultBlock,
-  ToolUseBlock,
-} from "./types.js";
-
-const registeredTools: AgentTool[] = [
+export const readTools: AgentTool[] = [
   {
     name: "read_file",
     description:
@@ -50,23 +42,7 @@ const registeredTools: AgentTool[] = [
     },
     execute: listFiles,
   },
-  ...fileTools,
-  commandTool,
 ];
-
-// 发给模型的只有说明和参数结构。
-export const toolDefinitions: ToolDefinition[] = registeredTools.map(
-  ({ name, description, input_schema }) => ({
-    name,
-    description,
-    input_schema,
-  }),
-);
-
-// 执行函数留在本地，通过名称查找。
-const toolsByName = new Map(
-  registeredTools.map((tool) => [tool.name, tool]),
-);
 
 async function resolveExistingPath(
   input: unknown,
@@ -179,42 +155,3 @@ async function listFiles(
   );
 }
 
-export async function executeTool(
-  call: ToolUseBlock,
-  signal?: AbortSignal,
-  extraTools: AgentTool[] = [],
-): Promise<ToolResultBlock> {
-  try {
-    signal?.throwIfAborted();
-
-    const tool = toolsByName.get(call.name) ?? extraTools.find(tool => tool.name === call.name);
-
-    if (!tool) {
-      throw new Error(`未知工具：${call.name}`);
-    }
-
-    // 等待工具自己完成取消和清理。
-    // 写入和命令执行不能只通过 abortable 停止等待。
-    const content = await tool.execute(call.input, signal);
-
-    signal?.throwIfAborted();
-
-    return {
-      type: "tool_result",
-      tool_use_id: call.id,
-      content,
-    };
-  } catch (error) {
-    // 用户取消中断整轮；普通工具错误交回模型处理。
-    signal?.throwIfAborted();
-
-    return {
-      type: "tool_result",
-      tool_use_id: call.id,
-      content: error instanceof Error
-        ? error.message
-        : String(error),
-      is_error: true,
-    };
-  }
-}

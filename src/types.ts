@@ -1,6 +1,11 @@
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = typeof THINKING_LEVELS[number];
 
+export function thinkingLevel(value: unknown): ThinkingLevel {
+  if (!THINKING_LEVELS.includes(value as ThinkingLevel)) throw new Error(`推理强度应为 ${THINKING_LEVELS.join(" / ")}`);
+  return value as ThinkingLevel;
+}
+
 // 会话中只保存选择信息，不保存密钥或请求头。
 export interface ModelSelection {
   provider: string;

@@ -3,13 +3,12 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parse, type ParseError } from "jsonc-parser";
-import { MAX_MODEL_CALLS } from "./agent.js";
-import { thinkingLevel, type CliOptions } from "./cli.js";
-import { CONTEXT_LIMITS } from "./context.js";
-import { DEFAULT_CONTEXT_WINDOW, inputTokenBudget } from "./budget.js";
-import { messagesUrl, reasoningParameters, requestHeaders } from "./model.js";
-import { THINKING_LEVELS, type ContextLimits, type ModelConfig, type ModelSelection, type ThinkingLevel } from "./types.js";
-import { skillPath, type SkillOptions } from "./skills.js";
+import { MAX_MODEL_CALLS, CONTEXT_LIMITS, validateContextSize } from "../agent/runtime-limits.js";
+import type { CliOptions } from "../cli/args.js";
+import { DEFAULT_CONTEXT_WINDOW, inputTokenBudget } from "../agent/budget.js";
+import { messagesUrl, reasoningParameters, requestHeaders } from "../llm/model.js";
+import { thinkingLevel, THINKING_LEVELS, type ContextLimits, type ModelConfig, type ModelSelection, type ThinkingLevel } from "../types.js";
+import { skillPath, type SkillOptions } from "../project/skills.js";
 
 type Dict = Record<string, unknown>;
 export interface ResolveOptions { provider?: string; model?: string; thinking?: ThinkingLevel; maxTokens?: number; }
@@ -68,10 +67,7 @@ function contextLimitsOf(raw: unknown): ContextLimits {
     if (!Object.hasOwn(minimums, key)) throw new Error(`contextLimits.${key} 不是可配置项；支持 ${Object.keys(minimums).join("、")}`);
     limits[key as keyof ContextLimits] = integer(value, `contextLimits.${key}`, minimums[key as keyof ContextLimits]);
   }
-  const required = limits.batchChars + limits.maxSummaryChars + 4000;
-  if (limits.maxInputChars < required) {
-    throw new Error(`contextLimits.maxInputChars 至少为 batchChars + maxSummaryChars + 4000，即 ${required}`);
-  }
+  validateContextSize(limits);
   return limits;
 }
 // 未配置或设为 0 时不限主循环请求次数。

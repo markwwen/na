@@ -1,9 +1,9 @@
-import { THINKING_LEVELS, type ModelSelection } from "./types.js";
+import { THINKING_LEVELS, type ModelSelection } from "../types.js";
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { assertHistory, checkpointOf, object } from "./history.js";
-import type { SessionSnapshot } from "./history.js";
+import { assertHistory, checkpointOf, object } from "../agent/history.js";
+import type { SessionSnapshot } from "../agent/history.js";
 
 interface Metadata {
   version: 1;

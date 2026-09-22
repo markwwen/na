@@ -8,9 +8,9 @@ import {
   sep,
 } from "node:path";
 
-import { abortable } from "./control.js";
-import { argumentsOf } from "./file-tools.js";
-import type { AgentTool } from "./types.js";
+import { abortable } from "../agent/control.js";
+import { argumentsOf } from "./input.js";
+import type { AgentTool } from "../types.js";
 
 async function runCommand(
   input: unknown,

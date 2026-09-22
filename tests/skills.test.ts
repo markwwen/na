@@ -3,12 +3,13 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { SkillCatalog } from "../src/skills.js";
-import { ConfigCatalog } from "../src/config.js";
-import { parseArgs } from "../src/cli.js";
-import { executeTool } from "../src/tools.js";
-import { Agent } from "../src/agent.js";
-import { assertHistory, type SessionSnapshot } from "../src/history.js";
+import { SkillCatalog } from "../src/project/skills.js";
+import { ConfigCatalog } from "../src/config/config.js";
+import { parseArgs } from "../src/cli/args.js";
+import { ToolRegistry } from "../src/tools/registry.js";
+import { builtinTools } from "../src/tools/builtin.js";
+import { Agent } from "../src/agent/agent.js";
+import { assertHistory, type SessionSnapshot } from "../src/agent/history.js";
 import type { ModelConfig, AssistantMessage } from "../src/types.js";
 
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
@@ -95,7 +96,7 @@ test("skill resources outside project work; traversal, escaped symlinks, binary 
   await assert.rejects(c.readResource("global", "escape"), /只能读取/);
   await assert.rejects(c.readResource("global", "binary"), /二进制/);
   await assert.rejects(c.readResource("global", "big"), /64 KiB/);
-  const result = await executeTool({ type: "tool_use", id: "bad", name: "read_skill_file", input: { name: "global", path: "escape" } }, undefined, c.tools());
+  const result = await new ToolRegistry(c.tools()).execute({ type: "tool_use", id: "bad", name: "read_skill_file", input: { name: "global", path: "escape" } });
   assert.equal(result.is_error, true);
   assert.ok(!result.content.includes("OUTSIDE"));
 });
@@ -179,7 +180,10 @@ test("agent advertises skill tools, loads instructions and references, saves a c
     assert.equal(body.messages.at(-1).content[0].content, "REFERENCE");
     return stream([{ type: "text", text: "review complete" }], "end_turn");
   });
-  const agent = new Agent(model, c.prompt(), undefined, async state => { saved = state; }, undefined, undefined, undefined, c.tools());
+  const agent = new Agent({
+    model, systemPrompt: c.prompt(), tools: [...builtinTools, ...c.tools()],
+    save: async state => { saved = state; },
+  });
   assert.equal(await agent.prompt("review my code"), "review complete");
   assert.equal(requestCount, 3);
   assertHistory(saved!.messages);
@@ -200,8 +204,11 @@ test("explicit invocation is archived; resumed agent uses current catalog rather
     assert.ok(body.messages.at(-1).content.includes("INSTRUCTIONS_ONLY_ON_DEMAND"));
     return stream([{ type: "text", text: "done" }], "end_turn");
   });
-  const agent = new Agent(model, "CURRENT_CATALOG\n" + c.prompt(), undefined, async state => { saved = state; }, undefined,
-    { messages: [{ role: "system", content: "STALE_CATALOG" }] }, undefined, c.tools());
+  const agent = new Agent({
+    model, systemPrompt: "CURRENT_CATALOG\n" + c.prompt(), tools: [...builtinTools, ...c.tools()],
+    save: async state => { saved = state; },
+    initialState: { messages: [{ role: "system", content: "STALE_CATALOG" }] },
+  });
   await agent.prompt(await c.invoke("review", "check src"));
   assertHistory(saved!.messages);
   assert.ok(JSON.stringify(saved).includes("/skill:review check src"));

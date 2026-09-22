@@ -3,7 +3,7 @@ import type {
   LLMResponse,
   StreamEvent,
   TokenUsage,
-} from "./types.js";
+} from "../types.js";
 
 type Block = AssistantMessage["content"][number];
 type Listener = (event: StreamEvent) => void;

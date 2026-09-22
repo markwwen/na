@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { link, lstat, mkdir, open, readdir, realpath, rm } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { exists, isWithin, readProjectText } from "./project-files.js";
+import { exists, isWithin, readProjectText } from "./files.js";
 
 export interface ScaffoldFile { path: string; content: string; skipReason?: string; }
 export interface InitPlan { root: string; files: ScaffoldFile[]; diagnostics: string[]; }

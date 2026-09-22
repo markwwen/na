@@ -1,6 +1,6 @@
 import { realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { exists, readProjectText } from "./project-files.js";
+import { exists, readProjectText } from "./files.js";
 
 export interface ProjectInstructions {
   files: string[];

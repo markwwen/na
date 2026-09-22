@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { applyInit, planInit } from "../src/init.js";
-import { loadProjectInstructions } from "../src/instructions.js";
-import { SkillCatalog } from "../src/skills.js";
-import { Agent } from "../src/agent.js";
-import type { SessionSnapshot } from "../src/history.js";
+import { applyInit, planInit } from "../src/project/init.js";
+import { loadProjectInstructions } from "../src/project/instructions.js";
+import { SkillCatalog } from "../src/project/skills.js";
+import { builtinTools } from "../src/tools/builtin.js";
+import { Agent } from "../src/agent/agent.js";
+import type { SessionSnapshot } from "../src/agent/history.js";
 import type { ModelConfig } from "../src/types.js";
 
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
@@ -166,16 +167,18 @@ test("environment reload preserves rounds; failed save retains previous environm
     baseUrl: "http://mock.invalid", apiKey: "", authHeader: false, headers: {}, maxTokens: 8192, thinkingMode: "budget" };
   let saved: SessionSnapshot | undefined;
   let fail = false;
-  const agent = new Agent(model, "OLD", undefined, async state => {
-    if (fail) throw new Error("save-failed"); saved = state;
-  }, undefined, { messages: [{ role: "system", content: "OLD" }, { role: "user", content: "question" },
-    { role: "assistant", content: [{ type: "text", text: "answer" }] }] });
-  await agent.setEnvironment("CURRENT", []);
+  const agent = new Agent({
+    model, systemPrompt: "OLD", tools: builtinTools,
+    save: async state => { if (fail) throw new Error("save-failed"); saved = state; },
+    initialState: { messages: [{ role: "system", content: "OLD" }, { role: "user", content: "question" },
+      { role: "assistant", content: [{ type: "text", text: "answer" }] }] },
+  });
+  await agent.setEnvironment("CURRENT", builtinTools);
   assert.equal(agent.contextInfo().turns, 1);
   assert.equal(saved!.messages[0]!.content, "CURRENT");
   const before = agent.contextInfo().requestChars;
   fail = true;
-  await assert.rejects(agent.setEnvironment("FAILED_NEW_CONTEXT".repeat(100), []), /save-failed/);
+  await assert.rejects(agent.setEnvironment("FAILED_NEW_CONTEXT".repeat(100), builtinTools), /save-failed/);
   assert.equal(agent.contextInfo().requestChars, before);
   assert.equal(saved!.messages[1]!.content, "question");
 });

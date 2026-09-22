@@ -1,16 +1,9 @@
-import { callLLM } from "./client.js";
+import { callLLM } from "../llm/client.js";
 import { calibrateUsage, estimateInputTokens, inputTokenBudget, type UsageCalibration } from "./budget.js";
 import type { ContextCheckpoint } from "./history.js";
-import type { ContextLimits, Message, ModelConfig, TokenUsage, ToolDefinition } from "./types.js";
+import type { ContextLimits, Message, ModelConfig, TokenUsage, ToolDefinition } from "../types.js";
 
-// 默认值；可用 settings.json 的 contextLimits 按字段覆盖。
-export const CONTEXT_LIMITS: ContextLimits = {
-  maxInputChars: 480_000,
-  keepTurns: 2,
-  maxSummaryChars: 6_000,
-  batchChars: 24_000,
-  reserveTokens: 16_384,
-};
+import { CONTEXT_LIMITS, validateContextLimits } from "./runtime-limits.js";
 
 export class ContextManager {
   checkpoint: ContextCheckpoint;
@@ -25,13 +18,7 @@ export class ContextManager {
     public calibration?: UsageCalibration,
   ) {
     this.checkpoint = structuredClone(checkpoint ?? { through: 1, summary: "" });
-    const { maxInputChars, keepTurns, maxSummaryChars, batchChars, reserveTokens } = limits;
-    if (![maxInputChars, keepTurns, maxSummaryChars, batchChars, reserveTokens].every(Number.isSafeInteger) ||
-      keepTurns < 0 || reserveTokens < 0 || batchChars < 1000 || maxSummaryChars < 100 ||
-      maxInputChars < batchChars + maxSummaryChars + 4000) {
-      throw new Error("上下文配置无效：各项都必须是整数，且 keepTurns ≥ 0、reserveTokens ≥ 0、batchChars ≥ 1000、" +
-        "maxSummaryChars ≥ 100、maxInputChars ≥ batchChars + maxSummaryChars + 4000");
-    }
+    validateContextLimits(limits);
     inputTokenBudget(model, limits);
   }
 

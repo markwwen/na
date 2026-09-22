@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Agent } from "../src/agent.js";
-import { calibrateUsage, estimateInputTokens, fitOutputBudget } from "../src/budget.js";
-import { callLLM } from "../src/client.js";
-import { ContextManager, CONTEXT_LIMITS } from "../src/context.js";
-import { readMessageStream } from "../src/stream.js";
-import type { SessionSnapshot } from "../src/history.js";
+import { builtinTools } from "../src/tools/builtin.js";
+import { Agent } from "../src/agent/agent.js";
+import { calibrateUsage, estimateInputTokens, fitOutputBudget } from "../src/agent/budget.js";
+import { callLLM } from "../src/llm/client.js";
+import { ContextManager } from "../src/agent/context.js";
+import { CONTEXT_LIMITS } from "../src/agent/runtime-limits.js";
+import { readMessageStream } from "../src/llm/stream.js";
+import type { SessionSnapshot } from "../src/agent/history.js";
 import type { AssistantMessage, Message, ModelConfig } from "../src/types.js";
 
 const model: ModelConfig = { provider: "mock", id: "mock", thinkingLevel: "off", api: "anthropic-messages",
@@ -112,8 +114,11 @@ test("default agent can finish beyond 20 model calls and archives only the compl
     return calls <= 24 ? response([{ type: "tool_use", id: `call-${calls}`, name: "noop", input: {} }], "tool_use")
       : response(text("done").content);
   });
-  const agent = new Agent(model, "system", undefined, async state => { saved = state; }, undefined, undefined, undefined,
-    [{ name: "noop", description: "noop", input_schema: {}, execute: async () => { toolCalls++; return "ok"; } }]);
+  const agent = new Agent({
+    model, systemPrompt: "system", save: async state => { saved = state; },
+    tools: [...builtinTools, { name: "noop", description: "noop", input_schema: {},
+      execute: async () => { toolCalls++; return "ok"; } }],
+  });
   assert.equal(await agent.prompt("long task"), "done");
   assert.equal(calls, 25);
   assert.equal(toolCalls, 24);
@@ -130,10 +135,13 @@ test("explicit call cap and user cancellation stop without saving a partial roun
     calls++;
     return response([{ type: "tool_use", id: `call-${calls}`, name: "noop", input: {} }], "tool_use");
   });
-  const agent = new Agent(model, "system", undefined, async () => { saves++; }, undefined, undefined, undefined,
-    [{ name: "noop", description: "noop", input_schema: {}, execute: async () => {
+  const agent = new Agent({
+    model, systemPrompt: "system", save: async () => { saves++; },
+    tools: [...builtinTools, { name: "noop", description: "noop", input_schema: {}, execute: async () => {
       if (cancel) controller.abort(new Error("cancel-test")); return "ok";
-    } }], CONTEXT_LIMITS, 2);
+    } }],
+    limits: CONTEXT_LIMITS, maxModelCalls: 2,
+  });
   await assert.rejects(agent.prompt("task"), /2 次模型请求上限/);
   assert.equal(calls, 2);
   assert.equal(saves, 0);
@@ -151,7 +159,10 @@ test("usage is committed with successful rounds, retained for missing usage and 
     reportUsage ? { input_tokens: 10000, output_tokens: 1 } : undefined,
     reportUsage ? [{ output_tokens: 100 }] : []));
   let fail = false;
-  const agent = new Agent(model, "system", undefined, async () => { if (fail) throw new Error("save-failed"); });
+  const agent = new Agent({
+    model, systemPrompt: "system", tools: builtinTools,
+    save: async () => { if (fail) throw new Error("save-failed"); },
+  });
   await agent.prompt("question");
   assert.equal(agent.contextInfo().requestTokens, 10100);
   assert.equal(agent.contextInfo().tokenSource, "usage");
@@ -164,10 +175,10 @@ test("usage is committed with successful rounds, retained for missing usage and 
   fail = true;
   await assert.rejects(agent.prompt("next"), /save-failed/);
   assert.deepEqual(agent.contextInfo(), snapshot);
-  await assert.rejects(agent.setEnvironment("new", [], undefined, limits, 3), /save-failed/);
+  await assert.rejects(agent.setEnvironment("new", builtinTools, undefined, limits, 3), /save-failed/);
   assert.deepEqual(agent.contextInfo(), snapshot);
   fail = false;
-  await agent.setEnvironment("new", [], undefined, limits, 3);
+  await agent.setEnvironment("new", builtinTools, undefined, limits, 3);
   assert.equal(agent.contextInfo().tokenSource, "estimate");
   assert.equal(agent.contextInfo().reserveTokens, 2048);
   assert.equal(agent.contextInfo().maxModelCalls, 3);
@@ -179,9 +190,9 @@ test("usage is committed with successful rounds, retained for missing usage and 
 
 test("invalid reload budgets are rejected before saving or replacing the environment", async () => {
   let saves = 0;
-  const agent = new Agent(model, "system", undefined, async () => { saves++; });
+  const agent = new Agent({ model, systemPrompt: "system", save: async () => { saves++; }, tools: builtinTools });
   const before = agent.contextInfo();
-  await assert.rejects(agent.setEnvironment("new", [], undefined,
+  await assert.rejects(agent.setEnvironment("new", builtinTools, undefined,
     { ...CONTEXT_LIMITS, reserveTokens: 128000 }, 3), /contextWindow 太小/);
   assert.equal(saves, 0);
   assert.deepEqual(agent.contextInfo(), before);
@@ -190,9 +201,12 @@ test("invalid reload budgets are rejected before saving or replacing the environ
 test("model and prompt updates commit together only after a successful save", async t => {
   let fail = true;
   let saved: SessionSnapshot | undefined;
-  const agent = new Agent(model, "old prompt", undefined, async state => {
-    if (fail) throw new Error("save-failed");
-    saved = state;
+  const agent = new Agent({
+    model, systemPrompt: "old prompt", tools: builtinTools,
+    save: async state => {
+      if (fail) throw new Error("save-failed");
+      saved = state;
+    },
   });
   const next = { ...model, id: "other" };
   await assert.rejects(agent.setModel(next, undefined, "new prompt"), /save-failed/);

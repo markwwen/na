@@ -1,4 +1,4 @@
-import type { Message, ModelSelection } from "./types.js";
+import type { Message, ModelSelection } from "../types.js";
 
 export interface ContextCheckpoint {
   // 摘要覆盖 messages[1..through)，不包含最初的 system。

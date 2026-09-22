@@ -1,70 +1,76 @@
-import { selectionOf } from "./model.js";
-import { ContextManager, CONTEXT_LIMITS } from "./context.js";
+import { selectionOf } from "../llm/model.js";
+import { ContextManager } from "./context.js";
 import { assertHistory, checkpointOf } from "./history.js";
 import type { ContextCheckpoint, SessionSnapshot } from "./history.js";
-import { callLLM } from "./client.js";
-import { executeTool, toolDefinitions } from "./tools.js";
+import { callLLM } from "../llm/client.js";
+import { ToolRegistry } from "../tools/registry.js";
 import { DEFAULT_CONTEXT_WINDOW, inputTokenBudget, type UsageCalibration } from "./budget.js";
 
 import type {
   AgentTool,
   ContextLimits,
-  ToolDefinition,
   StreamEvent,
   Message,
   ModelConfig,
   ToolResultBlock,
   ToolUseBlock,
-} from "./types.js";
+} from "../types.js";
 
-// 0 表示不限主循环请求次数；仍受取消、请求超时和上下文预算约束。
-export const MAX_MODEL_CALLS = 0;
+import { CONTEXT_LIMITS, MAX_MODEL_CALLS, validateContextLimits, validateMaxModelCalls } from "./runtime-limits.js";
 
-export class Agent {
-  private messages: Message[];
-  private checkpoint: ContextCheckpoint;
-  private definitions: ToolDefinition[];
-  private calibration?: UsageCalibration;
-
-constructor(
-  private model: ModelConfig,
-  private systemPrompt: string,
-  private readonly onToolCall?: (call: ToolUseBlock) => void,
-  private readonly saveMessages?: (state: SessionSnapshot) => Promise<void>,
-  private readonly onStream?: (event: StreamEvent) => void,
-  initial?: SessionSnapshot,
-  private readonly onNotice?: (text: string) => void,
-  private extraTools: AgentTool[] = [],
-  private limits: ContextLimits = CONTEXT_LIMITS,
-  private maxModelCalls: number = MAX_MODEL_CALLS,
-) {
-  this.definitions = this.definitionsFor(extraTools);
-  this.messages = structuredClone(initial?.messages ?? this.createInitialMessages());
-  assertHistory(this.messages);
-  this.checkpoint = checkpointOf(initial?.context, this.messages);
-  this.setLimits(limits, maxModelCalls);
+export interface AgentOptions {
+  model: ModelConfig;
+  systemPrompt: string;
+  tools: AgentTool[];
+  initialState?: SessionSnapshot;
+  save?: (state: SessionSnapshot) => Promise<void>;
+  onToolCall?: (call: ToolUseBlock) => void;
+  onStream?: (event: StreamEvent) => void;
+  onNotice?: (text: string) => void;
+  limits?: ContextLimits;
+  maxModelCalls?: number;
 }
 
-  private definitionsFor(extraTools: AgentTool[]): ToolDefinition[] {
-  const names = new Set(toolDefinitions.map(tool => tool.name));
-  for (const tool of extraTools) {
-    if (names.has(tool.name)) throw new Error(`工具重名：${tool.name}`);
-    names.add(tool.name);
-  }
-  return [...toolDefinitions, ...extraTools.map(({ name, description, input_schema }) => ({ name, description, input_schema }))];
+export class Agent {
+  private model: ModelConfig;
+  private systemPrompt: string;
+  private messages: Message[];
+  private checkpoint: ContextCheckpoint;
+  private registry: ToolRegistry;
+  private calibration?: UsageCalibration;
+  private limits: ContextLimits;
+  private maxModelCalls: number;
+  private readonly saveMessages?: AgentOptions["save"];
+  private readonly onToolCall?: AgentOptions["onToolCall"];
+  private readonly onStream?: AgentOptions["onStream"];
+  private readonly onNotice?: AgentOptions["onNotice"];
+
+  constructor(options: AgentOptions) {
+    this.model = options.model;
+    this.systemPrompt = options.systemPrompt;
+    this.registry = new ToolRegistry(options.tools);
+    this.saveMessages = options.save;
+    this.onToolCall = options.onToolCall;
+    this.onStream = options.onStream;
+    this.onNotice = options.onNotice;
+    this.messages = structuredClone(options.initialState?.messages ?? this.createInitialMessages());
+    assertHistory(this.messages);
+    this.checkpoint = checkpointOf(options.initialState?.context, this.messages);
+    this.limits = { ...(options.limits ?? CONTEXT_LIMITS) };
+    this.maxModelCalls = options.maxModelCalls ?? MAX_MODEL_CALLS;
+    this.validateLimits(this.limits, this.maxModelCalls);
   }
 
-  async setEnvironment(systemPrompt: string, extraTools: AgentTool[], signal?: AbortSignal,
+  async setEnvironment(systemPrompt: string, tools: AgentTool[], signal?: AbortSignal,
     limits: ContextLimits = this.limits, maxModelCalls: number = this.maxModelCalls): Promise<void> {
     signal?.throwIfAborted();
-    const definitions = this.definitionsFor(extraTools);
+    const registry = new ToolRegistry(tools);
     this.validateLimits(limits, maxModelCalls);
     const messages: Message[] = [{ role: "system", content: systemPrompt }, ...this.messages.slice(1)];
     await this.saveMessages?.(structuredClone({ messages, context: this.checkpoint, model: selectionOf(this.model) }));
     this.messages = messages;
     this.systemPrompt = systemPrompt;
-    this.extraTools = extraTools;
-    this.definitions = definitions;
+    this.registry = registry;
     this.setLimits(limits, maxModelCalls);
     this.calibration = undefined;
   }
@@ -77,8 +83,9 @@ constructor(
   }
 
   private validateLimits(limits: ContextLimits, maxModelCalls: number): void {
-    if (!Number.isSafeInteger(maxModelCalls) || maxModelCalls < 0) throw new Error("maxModelCalls 必须是非负整数，0 表示不限次数");
-    new ContextManager(this.model, this.systemPrompt, this.definitions, this.checkpoint, undefined, limits);
+    validateMaxModelCalls(maxModelCalls);
+    validateContextLimits(limits);
+    inputTokenBudget(this.model, limits);
   }
 
   runtimeLimits() {
@@ -105,7 +112,7 @@ constructor(
       const { message, stopReason, usage } = await callLLM(
         this.model,
         input,
-        this.definitions,
+        this.registry.definitions,
         this.onStream,
         signal,
         context.estimate(input).tokens,
@@ -137,7 +144,7 @@ constructor(
 
           this.onToolCall?.(call);
 
-          results.push(await executeTool(call, signal, this.extraTools));
+          results.push(await this.registry.execute(call, signal));
         }
 
         // 同一条回复里的所有工具结果，
@@ -242,7 +249,7 @@ constructor(
   }
 
   private createContext(): ContextManager {
-    return new ContextManager(this.model, this.systemPrompt, this.definitions, this.checkpoint, this.onNotice, this.limits, this.calibration);
+    return new ContextManager(this.model, this.systemPrompt, this.registry.definitions, this.checkpoint, this.onNotice, this.limits, this.calibration);
   }
 
   private createInitialMessages(): Message[] {

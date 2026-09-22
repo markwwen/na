@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { replayMessages } from "./model.js";
-import type { ContextLimits, Message, ModelConfig, TokenUsage, ToolDefinition } from "./types.js";
+import { replayMessages } from "../llm/model.js";
+import type { ContextLimits, Message, ModelConfig, TokenUsage, ToolDefinition } from "../types.js";
 
 // 未声明窗口时采用的本地预算假设，不代表服务端实际容量。
 export const DEFAULT_CONTEXT_WINDOW = 500_000;

@@ -20,31 +20,12 @@ import {
   sep,
 } from "node:path";
 
-import { abortable } from "./control.js";
-import type { AgentTool } from "./types.js";
+import { abortable } from "../agent/control.js";
+import type { AgentTool } from "../types.js";
+
+import { argumentsOf, stringArg } from "./input.js";
 
 const MAX_BYTES = 128 * 1024;
-
-export function argumentsOf(
-  input: unknown,
-): Record<string, unknown> {
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new Error("工具参数必须是对象");
-  }
-
-  return input as Record<string, unknown>;
-}
-
-function stringArg(
-  args: Record<string, unknown>,
-  key: string,
-): string {
-  if (typeof args[key] !== "string") {
-    throw new Error(`${key} 必须是字符串`);
-  }
-
-  return args[key];
-}
 
 function inside(root: string, target: string): void {
   const rel = relative(root, target);

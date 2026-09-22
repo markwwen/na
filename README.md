@@ -8,6 +8,7 @@
 
 当前可以在终端中与模型对话，让模型自主查看目录、读取和修改代码、执行类型检查和测试，同时显示 thinking 和工具调用过程。
 
+首次阅读源码可从 [架构导读](docs/architecture.md) 开始：包含模块关系图、任务时序、状态保存和上下文管理，以及源码阅读路线。
 
 ## 安装
 
@@ -227,7 +228,7 @@ na --resume <会话 ID 或前缀>
 | `/init --dry-run` | 显示计划写入的文件和内容，不写入框架文件 |
 | `/reload` | 重新加载项目指令、skills、`contextLimits` 与 `maxModelCalls`，保留当前会话、模型及推理强度 |
 | `/skills` | 列出已发现的 skills、描述、文件路径及加载诊断 |
-| `/skill:<name> [任务说明]` | 加载指定 skill 并开始一轮任务，例如 `/skill:code-review 检查 src/agent.ts` |
+| `/skill:<name> [任务说明]` | 加载指定 skill 并开始一轮任务，例如 `/skill:code-review 检查 src/agent/agent.ts` |
 | `/model` | 列出可用模型及当前选择 |
 | `/model <provider/id> [thinking]` | 切换当前会话的模型，可同时指定推理强度 |
 | `/thinking [level]`、`/effort [level]` | 查看或切换推理强度，具体可用档位由模型配置决定 |
@@ -279,7 +280,7 @@ na 的导入器读取 Pi 的 `~/.pi/agent/settings.json`、`models.json` 和项�
 
 目前兼容常用模型字段及 `model`、`effortLevel` 别名，模型请求仅支持 `anthropic-messages`；不导入内置模型目录、OAuth 登录、hooks 或权限配置，也不执行 `!command` 凭据命令。`settings.env` 仅参与请求配置解析，不注入工具命令环境，且同名进程环境变量优先。
 
-System 提示词仍在 `src/main.ts` 的 `SYSTEM_PROMPT` 中。上下文预算的默认值在 `src/context.ts` 的 `CONTEXT_LIMITS`：输入上限 480000 字符、保留最近 2 轮、单批摘要输入 24000 字符、摘要上限 6000 字符、预留 16384 tokens；运行时由 settings 的 `contextLimits` 逐字段覆盖，实际生效值可用 `/config` 查看。
+System 提示词在 `src/app.ts` 的 `SYSTEM_PROMPT` 中。上下文预算的默认值在 `src/agent/runtime-limits.ts` 的 `CONTEXT_LIMITS`：输入上限 480000 字符、保留最近 2 轮、单批摘要输入 24000 字符、摘要上限 6000 字符、预留 16384 tokens；运行时由 settings 的 `contextLimits` 逐字段覆盖，实际生效值可用 `/config` 查看。
 
 ## Skills
 
@@ -313,7 +314,7 @@ description: 检查代码中的行为错误、边界条件和回归风险。用�
 
 ```text
 /skills
-/skill:code-review 检查 src/agent.ts 的工具调用循环
+/skill:code-review 检查 src/agent/agent.ts 的工具调用循环
 ```
 
 仓库包含可直接尝试的示例，带一个按需读取的检查清单：
@@ -434,7 +435,7 @@ Agent 组织历史消息和工具定义
 | 工具 | 参数示例 | 行为与限制 |
 |---|---|---|
 | `list_files` | `{"path":"."}` | 列出直接子项，不递归；包含隐藏项，最多返回 100 项 |
-| `read_file` | `{"path":"src/agent.ts"}` | 读取 UTF-8 文本；文件不超过 128 KiB，最多返回前 20000 个字符 |
+| `read_file` | `{"path":"src/agent/agent.ts"}` | 读取 UTF-8 文本；文件不超过 128 KiB，最多返回前 20000 个字符 |
 | `write_file` | `{"path":"agent-demo.txt","content":"hello na"}` | 创建或完整覆盖 UTF-8 文件；父目录须已存在；最多 128 KiB；不支持符号链接目标 |
 | `edit_file` | `{"path":"src/main.ts","old_text":"...","new_text":"..."}` | 精确替换唯一匹配的 `old_text`；匹配零处或多处均失败；`new_text` 为空表示删除 |
 | `run_command` | `{"command":"npm run typecheck"}` | 通过 `/bin/sh` 执行非交互命令；默认超时 60 秒，最多 300 秒；stdout/stderr 各保留前 32 KiB；非零退出码或超时视为工具错误；仅支持 macOS / Linux |
@@ -478,28 +479,44 @@ examples/skills/   # 可通过 --skill 加载的示例
 tests/             # Skills、项目初始化、指令加载与 Agent 集成测试
 tsconfig.json      # TypeScript 配置，编译 src 到 dist
 src/
-├── main.ts         # REPL、配置与模块连接
-├── cli.ts          # CLI 参数解析与帮助
-├── config.ts       # 配置加载、合并与默认值保存
-├── env.ts          # 启动目录 .env 加载，保留已有环境变量
-├── model.ts        # 模型选择、请求参数与历史推理处理
-├── skills.ts       # Skill 发现、元数据解析、按需读取与调用
-├── init.ts         # 项目事实提取、框架预览与保留式创建
-├── instructions.ts # 项目指令发现与上下文拼接
-├── project-files.ts # 有大小限制的项目文本读取
-├── agent.ts        # 对话状态与工具调用循环
-├── client.ts       # 模型 HTTP 请求
-├── stream.ts       # SSE 解析与完整消息拼接
-├── renderer.ts     # 流式终端显示与 thinking 样式
-├── tools.ts        # 工具定义、注册与执行
-├── file-tools.ts   # write_file 与 edit_file
-├── command-tool.ts # run_command
-├── control.ts      # 取消、超时与可中断等待
-├── context.ts      # 上下文预算与摘要压缩
-├── history.ts      # 消息历史校验与摘要检查点
-├── session.ts      # 会话创建与 JSON 保存
-└── types.ts        # 模型、消息、工具及事件类型
+├── main.ts                 # 启动参数、环境初始化与应用组装
+├── app.ts                  # 当前应用状态、提示词、模型切换与会话操作
+├── types.ts                # 模型、消息、工具及流事件类型
+├── cli/
+│   ├── args.ts             # 启动参数解析与帮助
+│   ├── repl.ts             # 命令分发、输入循环、取消与退出
+│   └── renderer.ts         # 流式终端显示与 thinking 样式
+├── agent/
+│   ├── agent.ts            # AgentOptions、对话状态与工具调用循环
+│   ├── context.ts          # 上下文预算与摘要压缩
+│   ├── budget.ts           # token 估算、usage 校准和输出预算
+│   ├── history.ts          # 消息历史校验与摘要检查点
+│   ├── control.ts          # 取消、超时与可中断等待
+│   └── runtime-limits.ts   # 运行限制默认值与共享校验
+├── llm/
+│   ├── client.ts           # 模型 HTTP 请求与超时
+│   ├── model.ts            # 模型选择、请求参数与历史推理处理
+│   └── stream.ts           # SSE 解析与完整消息拼接
+├── tools/
+│   ├── registry.ts         # 工具定义、名称去重与执行分发
+│   ├── builtin.ts          # 内置工具组合
+│   ├── read.ts             # read_file 与 list_files
+│   ├── write.ts            # write_file 与 edit_file
+│   ├── command.ts          # run_command 与进程清理
+│   └── input.ts            # 工具参数校验
+├── config/
+│   ├── config.ts           # 配置加载、合并与默认值保存
+│   └── env.ts              # 启动目录 .env 加载
+├── project/
+│   ├── instructions.ts    # 项目指令发现与上下文拼接
+│   ├── skills.ts          # Skill 发现、按需读取与调用
+│   ├── init.ts            # 项目事实提取与框架创建
+│   └── files.ts           # 有大小限制的项目文本读取
+└── session/
+    └── store.ts           # 会话创建、恢复与 JSON 保存
 ```
+
+项目保持单个 npm 包。`App` 组装模型、内置工具、skills 和会话保存回调，按顺序协调应用操作；`Agent` 使用具名的 `AgentOptions`，只依赖传入的完整工具列表。`ToolRegistry` 从同一份注册结果生成模型可见的定义并查找执行函数。终端输入、显示和 Ctrl+C 生命周期由 CLI 层管理。
 
 ## 开发
 

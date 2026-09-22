@@ -1,4 +1,4 @@
-import type { Message, ModelConfig, ModelSelection } from "./types.js";
+import type { Message, ModelConfig, ModelSelection } from "../types.js";
 
 export function selectionOf(model: ModelConfig): ModelSelection {
   return { provider: model.provider, id: model.id, thinkingLevel: model.thinkingLevel };

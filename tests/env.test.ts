@@ -9,8 +9,8 @@ import { tmpdir } from "node:os";
 
 const exec = promisify(execFile);
 const loader = new URL("../node_modules/tsx/dist/loader.mjs", import.meta.url).href;
-const envModule = new URL("../src/env.ts", import.meta.url).href;
-const configModule = new URL("../src/config.ts", import.meta.url).href;
+const envModule = new URL("../src/config/env.ts", import.meta.url).href;
+const configModule = new URL("../src/config/config.ts", import.meta.url).href;
 const main = fileURLToPath(new URL("../src/main.ts", import.meta.url));
 
 async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
